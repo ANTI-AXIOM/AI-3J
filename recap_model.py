@@ -287,10 +287,10 @@ class RecapDataset(Dataset):
 # IMPROVED TRANSFORMER (d_model=384, 4 layers)
 # ──────────────────────────────────────────────
 class RecapTransformer(nn.Module):
-    """~500K params, d_model=384, 4 layers, 8 heads."""
+    """~1.6M params, d_model=128, 3 layers, 4 heads, vocab=4000."""
 
-    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 384,
-                 nhead: int = 8, nlayers: int = 4, max_len: int = 48):
+    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 128,
+                 nhead: int = 4, nlayers: int = 3, max_len: int = 48):
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
@@ -299,7 +299,6 @@ class RecapTransformer(nn.Module):
             nn.Linear(feat_dim, d_model),
             nn.LayerNorm(d_model),
             nn.GELU(),
-            nn.Dropout(0.1),
         )
 
         self.token_embed = nn.Embedding(vocab_size, d_model)
@@ -307,7 +306,7 @@ class RecapTransformer(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=1024,
+            d_model=d_model, nhead=nhead, dim_feedforward=256,
             dropout=0.1, batch_first=True, activation="gelu",
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=nlayers)
@@ -332,7 +331,6 @@ class RecapTransformer(nn.Module):
             pos_ids = torch.arange(tgt.size(1), device=device).unsqueeze(0)
             tgt_emb = tgt_emb + self.pos_embed(pos_ids)
             tgt_emb = self.dropout(tgt_emb)
-
             tgt_mask = nn.Transformer.generate_square_subsequent_mask(
                 tgt.size(1), device=device)
             out = self.decoder(tgt_emb, memory.repeat(1, tgt.size(1), 1), tgt_mask=tgt_mask)
@@ -360,8 +358,6 @@ class RecapTransformer(nn.Module):
         device = features.device
         batch_size = features.size(0)
         memory = self.feat_proj(features).unsqueeze(1)
-
-        # Initialize beams
         sos = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
         beams = [(sos, 0.0)]
 
@@ -371,7 +367,6 @@ class RecapTransformer(nn.Module):
                 if seq[0, -1].item() == EOS:
                     candidates.append((seq, score))
                     continue
-
                 tgt_emb = self.token_embed(seq) * (self.d_model ** 0.5)
                 pos_ids = torch.arange(seq.size(1), device=device).unsqueeze(0)
                 tgt_emb = tgt_emb + self.pos_embed(pos_ids)
@@ -380,22 +375,16 @@ class RecapTransformer(nn.Module):
                 out = self.decoder(tgt_emb, memory.repeat(1, seq.size(1), 1), tgt_mask=tgt_mask)
                 logits = self.out(out[:, -1:, :]).squeeze(1)
                 log_probs = F.log_softmax(logits, dim=-1)
-
                 topk = log_probs.topk(beam_size, dim=-1)
                 for i in range(beam_size):
                     token = topk.indices[0, i].unsqueeze(0).unsqueeze(0)
                     new_seq = torch.cat([seq, token], dim=1)
                     new_score = score + topk.values[0, i].item()
                     candidates.append((new_seq, new_score))
-
-            # Keep top-K beams
             candidates.sort(key=lambda x: x[1], reverse=True)
             beams = candidates[:beam_size]
-
-            # Early stop if all EOS
             if all(b[0, 0, -1].item() == EOS for b, _ in beams):
                 break
-
         return beams[0][0]
 
 
@@ -408,7 +397,7 @@ def train():
     print(f"Training on {device}")
 
     # Generate diverse synthetic data
-    n_samples = 200000
+    n_samples = 100000
     print(f"Generating {n_samples} synthetic samples...")
     profiles, recaps = [], []
     for _ in range(n_samples):
@@ -418,15 +407,15 @@ def train():
 
     # Tokenizer
     tokenizer = SimpleTokenizer()
-    tokenizer.fit(recaps, max_vocab=3000)
+    tokenizer.fit(recaps, max_vocab=4000)
     print(f"Vocabulary: {tokenizer.vocab_size} tokens")
 
     # Dataset
     split = int(n_samples * 0.95)
     train_ds = RecapDataset(profiles[:split], recaps[:split], tokenizer)
     val_ds = RecapDataset(profiles[split:], recaps[split:], tokenizer)
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=128, num_workers=2)
+    train_loader = DataLoader(train_ds, batch_size=256, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=256, num_workers=2)
 
     # Model
     feat_dim = N_DMG + N_LOC + 7  # damages + locations + asset(3) + sev(3) + count(1)
@@ -446,7 +435,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4,
                                    betas=(0.9, 0.98))
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 30,
+        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 20,
         pct_start=0.1, anneal_strategy="cos",
     )
     criterion = nn.CrossEntropyLoss(ignore_index=PAD)
@@ -454,7 +443,7 @@ def train():
     Path("models").mkdir(exist_ok=True)
     best_loss = float("inf")
 
-    for epoch in range(30):
+    for epoch in range(20):
         model.train()
         total_loss = 0
         for feats, labels in train_loader:
@@ -506,9 +495,9 @@ def train():
                 "tokenizer": tokenizer,
                 "vocab_size": tokenizer.vocab_size,
                 "feat_dim": feat_dim,
-                "d_model": 384,
-                "nhead": 8,
-                "nlayers": 4,
+                "d_model": 128,
+                "nhead": 4,
+                "nlayers": 3,
                 "DMG_TO_IDX": DMG_TO_IDX,
                 "LOC_TO_IDX": LOC_TO_IDX,
                 "N_DMG": N_DMG,
