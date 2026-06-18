@@ -31,6 +31,9 @@ def train_yolo(
     cache: bool = True,
     amp: bool = True,
     benchmark: str = "",
+    freeze: int = 0,
+    warmup_epochs: int = 5,
+    cos_lr: bool = True,
 ):
     model = YOLO(model_name)
 
@@ -61,6 +64,9 @@ def train_yolo(
         workers=workers,
         cache=cache,
         amp=amp,
+        freeze=freeze,
+        warmup_epochs=warmup_epochs,
+        cos_lr=cos_lr,
         project=project,
         name=name,
         exist_ok=True,

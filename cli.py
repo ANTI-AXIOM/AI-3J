@@ -92,6 +92,9 @@ def run_train(args):
         device=args.device,
         workers=args.workers,
         benchmark=args.benchmark,
+        freeze=args.freeze,
+        warmup_epochs=args.warmup_epochs,
+        cos_lr=args.cos_lr,
     )
     print(f"✓ Best model saved to {best}")
 
@@ -131,6 +134,12 @@ def main():
                          help="device: 0, 1, cpu, or '' for auto-detect")
     train_p.add_argument("--benchmark", default="",
                          help="path to write benchmark JSON (e.g. benchmark.json)")
+    train_p.add_argument("--freeze", type=int, default=10,
+                         help="freeze first N backbone layers (0=no freeze, default=10)")
+    train_p.add_argument("--warmup-epochs", type=int, default=5,
+                         help="warmup epochs for LR ramp-up (default=5)")
+    train_p.add_argument("--cos-lr", action="store_true", default=True,
+                         help="use cosine LR scheduler (default=True)")
     train_p.set_defaults(func=run_train)
 
     args = parser.parse_args()
