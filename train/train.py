@@ -27,6 +27,8 @@ def train_yolo(
     project: str = "models",
     name: str = "damage_detector",
     workers: int = 8,
+    cache: bool = True,
+    amp: bool = True,
 ):
     model = YOLO(model_name)
     results = model.train(
@@ -45,6 +47,8 @@ def train_yolo(
         scale=augment_scale,
         device=device,
         workers=workers,
+        cache=cache,
+        amp=amp,
         project=project,
         name=name,
         exist_ok=True,
