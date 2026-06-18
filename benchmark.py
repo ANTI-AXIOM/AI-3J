@@ -58,14 +58,18 @@ class BenchmarkCallback:
             "loss": {},
         }
 
-        # Collect losses from trainer
+        # Collect losses from trainer (Tensor or dict)
         if hasattr(trainer, "loss"):
-            for k, v in trainer.loss.items():
-                if isinstance(v, (int, float)):
-                    stats["loss"][k] = round(float(v), 4)
+            loss = trainer.loss
+            if isinstance(loss, dict):
+                for k, v in loss.items():
+                    if isinstance(v, (int, float)):
+                        stats["loss"][k] = round(float(v), 4)
+            elif isinstance(loss, torch.Tensor):
+                stats["loss"]["total_loss"] = round(loss.item(), 4)
 
-        # Collect metrics from trainer
-        if hasattr(trainer, "metrics"):
+        # Collect metrics from trainer (dict or logger)
+        if hasattr(trainer, "metrics") and isinstance(trainer.metrics, dict):
             for k, v in trainer.metrics.items():
                 if isinstance(v, (int, float)):
                     stats[k] = round(float(v), 4)
@@ -75,8 +79,10 @@ class BenchmarkCallback:
             val = trainer.validator
             for k in ["mAP50", "mAP50-95", "precision", "recall", "f1"]:
                 if hasattr(val, k):
-                    stats[k] = round(getattr(val, k), 4)
-            if hasattr(val, "metrics"):
+                    v = getattr(val, k)
+                    if isinstance(v, (int, float)):
+                        stats[k] = round(float(v), 4)
+            if hasattr(val, "metrics") and isinstance(val.metrics, dict):
                 for k, v in val.metrics.items():
                     if isinstance(v, (int, float)) and k not in stats:
                         stats[k] = round(float(v), 4)
