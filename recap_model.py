@@ -326,59 +326,29 @@ class CausalTransformer(nn.Module):
             pos_emb = self.pos_embed(pos_ids)
             x = torch.cat([feat_token + pos_emb[:, :1], tgt_emb + pos_emb[:, 1:]], dim=1)
             x = self.dropout(x)
-            out = self.encoder(x, mask=self.causal_mask[:x.size(1), :x.size(1)], is_causal=False)
-            return self.out(out[:, 1:])  # predict next token for each position
+            out = self.encoder(x, mask=self.causal_mask[:x.size(1), :x.size(1)])
+            return self.out(out[:, 1:])
         else:
-            # Autoregressive with KV cache
-            x = feat_token + self.pos_embed(torch.zeros(b, 1, dtype=torch.long, device=device))
-            x = self.dropout(x)
-            generated = torch.full((b, 1), SOS, dtype=torch.long, device=device)
-            cache = {}  # layer_idx → (k, v)
+            # Autoregressive: embed features, then generate token by token
+            # Each step runs the full sequence through the encoder (fast at 300K params)
+            pos = self.pos_embed(torch.zeros(b, 1, dtype=torch.long, device=device))
+            x = feat_token + pos
+            generated = torch.empty(b, 0, dtype=torch.long, device=device)
 
             for step in range(self.max_len - 1):
-                # Embed current token
-                tok_emb = self.token_embed(generated[:, -1:]) * (self.d_model ** 0.5)
-                pos = self.pos_embed(torch.full((b, 1), min(step + 1, self.max_len - 1),
-                                                 dtype=torch.long, device=device))
-                curr = tok_emb + pos
-                curr = self.dropout(curr)
+                # Embed latest token
+                if step == 0:
+                    tok = torch.full((b, 1), SOS, dtype=torch.long, device=device)
+                else:
+                    tok = generated[:, -1:]
+                tok_emb = self.token_embed(tok) * (self.d_model ** 0.5)
+                pos = self.pos_embed(torch.full((b, 1), step + 1, dtype=torch.long, device=device))
+                curr = self.dropout(tok_emb + pos)
                 x = torch.cat([x, curr], dim=1)
 
-                # Run through layers with KV cache
-                h = x
-                for i, layer in enumerate(self.encoder.layers):
-                    # Self-attention with KV cache
-                    q = layer.self_attn.in_proj_weight[:self.d_model]
-                    k = layer.self_attn.in_proj_weight[self.d_model:self.d_model*2]
-                    v = layer.self_attn.in_proj_weight[self.d_model*2:]
-                    b_q = layer.self_attn.in_proj_bias[:self.d_model]
-                    b_k = layer.self_attn.in_proj_bias[self.d_model:self.d_model*2]
-                    b_v = layer.self_attn.in_proj_bias[self.d_model*2:]
-
-                    Q = F.linear(h[:, -1:], q, b_q)
-                    K = F.linear(h, k, b_k)
-                    V = F.linear(h, v, b_v)
-
-                    # Multi-head
-                    n_heads = self.encoder.layers[0].self_attn.num_heads
-                    h_dim = self.d_model // n_heads
-                    Q = Q.view(b, 1, n_heads, h_dim).transpose(1, 2)
-                    K = K.view(b, -1, n_heads, h_dim).transpose(1, 2)
-                    V = V.view(b, -1, n_heads, h_dim).transpose(1, 2)
-
-                    attn = (Q @ K.transpose(-2, -1)) * (h_dim ** -0.5)
-                    mask = self.causal_mask[:K.size(2), :K.size(2)].to(device)
-                    attn = attn + mask[None, None, K.size(2)-1:K.size(2), :]
-                    attn = F.softmax(attn, dim=-1)
-                    attn_out = (attn @ V).transpose(1, 2).contiguous().view(b, 1, self.d_model)
-                    attn_out = layer.self_attn.out_proj(attn_out)
-
-                    h_attn = layer.norm1(h[:, :-1] + attn_out)
-                    h_ff = layer.linear2(F.gelu(layer.linear1(h_attn)))
-                    h_out = layer.norm2(h_attn + h_ff)
-                    h = torch.cat([h[:, :-1], h_out], dim=1)
-
-                logits = self.out(h[:, -1:, :])
+                # Run full sequence through encoder once
+                out = self.encoder(x, mask=self.causal_mask[:x.size(1), :x.size(1)])
+                logits = self.out(out[:, -1:, :])
                 next_token = logits.argmax(dim=-1)
                 generated = torch.cat([generated, next_token], dim=1)
 
