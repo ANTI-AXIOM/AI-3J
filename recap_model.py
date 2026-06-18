@@ -360,7 +360,7 @@ class CausalTransformer(nn.Module):
 # ──────────────────────────────────────────────
 # TRAINING
 # ──────────────────────────────────────────────
-def train():
+def train(epochs: int = 10):
     torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
@@ -404,7 +404,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4,
                                    betas=(0.9, 0.98))
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 10,
+        optimizer, max_lr=5e-4, total_steps=len(train_loader) * epochs,
         pct_start=0.1, anneal_strategy="cos",
     )
     criterion = nn.CrossEntropyLoss(ignore_index=PAD)
@@ -412,7 +412,7 @@ def train():
     Path("models").mkdir(exist_ok=True)
     best_loss = float("inf")
 
-    for epoch in range(10):
+    for epoch in range(epochs):
         model.train()
         total_loss = 0
         for feats, labels in train_loader:
@@ -509,9 +509,13 @@ def generate(profile: dict, model: nn.Module, tokenizer: SimpleTokenizer,
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "generate":
-        # Test mode: generate a random recap
         p, r = generate_recap()
         print(f"Profile: {json.dumps(p, indent=2)}")
         print(f"\nRecap: {r}")
     else:
-        train()
+        epochs = 10
+        if len(sys.argv) > 1 and sys.argv[1].isdigit():
+            epochs = int(sys.argv[1])
+        elif len(sys.argv) > 2 and sys.argv[2].isdigit():
+            epochs = int(sys.argv[2])
+        train(epochs)
