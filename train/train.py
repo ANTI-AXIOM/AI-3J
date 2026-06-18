@@ -7,6 +7,7 @@ Usage: python train.py --data dataset.yaml --model yolo11n.pt --epochs 100
 import argparse
 from pathlib import Path
 from ultralytics import YOLO
+from benchmark import BenchmarkCallback
 
 
 def train_yolo(
@@ -29,8 +30,19 @@ def train_yolo(
     workers: int = 8,
     cache: bool = True,
     amp: bool = True,
+    benchmark: str = "",
 ):
     model = YOLO(model_name)
+
+    # Attach benchmark callback if requested
+    bench = None
+    if benchmark:
+        bench = BenchmarkCallback(log_path=benchmark)
+        model.add_callback("on_train_epoch_start", bench.on_epoch_start)
+        model.add_callback("on_train_batch_start", bench.on_batch_start)
+        model.add_callback("on_train_batch_end", bench.on_batch_end)
+        model.add_callback("on_train_epoch_end", bench.on_epoch_end)
+
     results = model.train(
         data=data_yaml,
         epochs=epochs,

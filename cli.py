@@ -91,6 +91,7 @@ def run_train(args):
         lr=args.lr,
         device=args.device,
         workers=args.workers,
+        benchmark=args.benchmark,
     )
     print(f"✓ Best model saved to {best}")
 
@@ -128,6 +129,8 @@ def main():
                          help="data loader workers")
     train_p.add_argument("--device", default="0",
                          help="device: 0, 1, cpu, or '' for auto-detect")
+    train_p.add_argument("--benchmark", default="",
+                         help="path to write benchmark JSON (e.g. benchmark.json)")
     train_p.set_defaults(func=run_train)
 
     args = parser.parse_args()
