@@ -3,9 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# Large data (not committed)
-dataset_frames/images/
-dataset_frames/labels/
+# Large data (excluded by choice)
 dataset_frames_old/
 car_damage/
 property_damage/
