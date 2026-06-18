@@ -409,6 +409,7 @@ def train():
         # Save best model
         if avg_val < best_loss:
             best_loss = avg_val
+            Path("models").mkdir(parents=True, exist_ok=True)
             torch.save({
                 "model_state": model.state_dict(),
                 "tokenizer": tokenizer,
