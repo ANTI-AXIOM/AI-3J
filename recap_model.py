@@ -286,11 +286,11 @@ class RecapDataset(Dataset):
 # ──────────────────────────────────────────────
 # IMPROVED TRANSFORMER (d_model=384, 4 layers)
 # ──────────────────────────────────────────────
-class RecapGRU(nn.Module):
-    """GRU-based decoder. ~200K params, trains 5-10× faster than transformer."""
+class CausalTransformer(nn.Module):
+    """GPT-style causal transformer. Self-attention only, no cross-attn. ~300K params."""
 
-    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 256,
-                 nlayers: int = 2, max_len: int = 48):
+    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 192,
+                 nhead: int = 6, nlayers: int = 4, max_len: int = 48):
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
@@ -298,41 +298,90 @@ class RecapGRU(nn.Module):
         self.feat_proj = nn.Linear(feat_dim, d_model)
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_len, d_model)
-
-        self.gru = nn.GRU(d_model, d_model, num_layers=nlayers,
-                          batch_first=True, dropout=0.2 if nlayers > 1 else 0)
-        self.out = nn.Linear(d_model, vocab_size)
         self.dropout = nn.Dropout(0.2)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model * 3,
+            dropout=0.1, batch_first=True, activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=nlayers)
+        self.out = nn.Linear(d_model, vocab_size)
+        self._register_causal_mask(max_len)
+
+    def _register_causal_mask(self, max_len):
+        mask = torch.triu(torch.full((max_len, max_len), float('-inf')), diagonal=1)
+        self.register_buffer('causal_mask', mask)
 
     def forward(self, features: torch.Tensor, target_tokens: Optional[torch.Tensor] = None,
                 teacher_forcing: bool = True) -> torch.Tensor:
-        batch_size = features.size(0)
         device = features.device
+        b = features.size(0)
 
-        # Initial hidden state from features
-        h0 = self.feat_proj(features).unsqueeze(0).repeat(self.gru.num_layers, 1, 1)
+        feat_token = self.feat_proj(features).unsqueeze(1)  # (B, 1, D)
 
         if teacher_forcing and target_tokens is not None:
             tgt = target_tokens[:, :-1]
             tgt_emb = self.token_embed(tgt) * (self.d_model ** 0.5)
-            pos_ids = torch.arange(tgt.size(1), device=device).unsqueeze(0)
-            tgt_emb = tgt_emb + self.pos_embed(pos_ids)
-            tgt_emb = self.dropout(tgt_emb)
-            out, _ = self.gru(tgt_emb, h0)
-            return self.out(out)
+            pos_ids = torch.arange(tgt.size(1) + 1, device=device).unsqueeze(0)
+            pos_emb = self.pos_embed(pos_ids)
+            x = torch.cat([feat_token + pos_emb[:, :1], tgt_emb + pos_emb[:, 1:]], dim=1)
+            x = self.dropout(x)
+            out = self.encoder(x, mask=self.causal_mask[:x.size(1), :x.size(1)], is_causal=False)
+            return self.out(out[:, 1:])  # predict next token for each position
         else:
-            # Autoregressive generation
-            generated = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
-            h = h0
+            # Autoregressive with KV cache
+            x = feat_token + self.pos_embed(torch.zeros(b, 1, dtype=torch.long, device=device))
+            x = self.dropout(x)
+            generated = torch.full((b, 1), SOS, dtype=torch.long, device=device)
+            cache = {}  # layer_idx → (k, v)
+
             for step in range(self.max_len - 1):
-                tgt_emb = self.token_embed(generated[:, -1:]) * (self.d_model ** 0.5)
-                pos = torch.full((batch_size, 1), min(step, self.max_len - 1),
-                                 dtype=torch.long, device=device)
-                tgt_emb = tgt_emb + self.pos_embed(pos)
-                out_step, h = self.gru(tgt_emb, h)
-                logits = self.out(out_step[:, 0, :])
-                next_token = logits.argmax(dim=-1).unsqueeze(1)
+                # Embed current token
+                tok_emb = self.token_embed(generated[:, -1:]) * (self.d_model ** 0.5)
+                pos = self.pos_embed(torch.full((b, 1), min(step + 1, self.max_len - 1),
+                                                 dtype=torch.long, device=device))
+                curr = tok_emb + pos
+                curr = self.dropout(curr)
+                x = torch.cat([x, curr], dim=1)
+
+                # Run through layers with KV cache
+                h = x
+                for i, layer in enumerate(self.encoder.layers):
+                    # Self-attention with KV cache
+                    q = layer.self_attn.in_proj_weight[:self.d_model]
+                    k = layer.self_attn.in_proj_weight[self.d_model:self.d_model*2]
+                    v = layer.self_attn.in_proj_weight[self.d_model*2:]
+                    b_q = layer.self_attn.in_proj_bias[:self.d_model]
+                    b_k = layer.self_attn.in_proj_bias[self.d_model:self.d_model*2]
+                    b_v = layer.self_attn.in_proj_bias[self.d_model*2:]
+
+                    Q = F.linear(h[:, -1:], q, b_q)
+                    K = F.linear(h, k, b_k)
+                    V = F.linear(h, v, b_v)
+
+                    # Multi-head
+                    n_heads = self.encoder.layers[0].self_attn.num_heads
+                    h_dim = self.d_model // n_heads
+                    Q = Q.view(b, 1, n_heads, h_dim).transpose(1, 2)
+                    K = K.view(b, -1, n_heads, h_dim).transpose(1, 2)
+                    V = V.view(b, -1, n_heads, h_dim).transpose(1, 2)
+
+                    attn = (Q @ K.transpose(-2, -1)) * (h_dim ** -0.5)
+                    mask = self.causal_mask[:K.size(2), :K.size(2)].to(device)
+                    attn = attn + mask[None, None, K.size(2)-1:K.size(2), :]
+                    attn = F.softmax(attn, dim=-1)
+                    attn_out = (attn @ V).transpose(1, 2).contiguous().view(b, 1, self.d_model)
+                    attn_out = layer.self_attn.out_proj(attn_out)
+
+                    h_attn = layer.norm1(h[:, :-1] + attn_out)
+                    h_ff = layer.linear2(F.gelu(layer.linear1(h_attn)))
+                    h_out = layer.norm2(h_attn + h_ff)
+                    h = torch.cat([h[:, :-1], h_out], dim=1)
+
+                logits = self.out(h[:, -1:, :])
+                next_token = logits.argmax(dim=-1)
                 generated = torch.cat([generated, next_token], dim=1)
+
                 if (next_token == EOS).all():
                     break
             return generated
@@ -369,11 +418,12 @@ def train():
 
     # Model
     feat_dim = N_DMG + N_LOC + 7  # damages + locations + asset(3) + sev(3) + count(1)
-    model = RecapGRU(
+    model = CausalTransformer(
         vocab_size=tokenizer.vocab_size,
         feat_dim=feat_dim,
-        d_model=256,
-        nlayers=2,
+        d_model=192,
+        nhead=6,
+        nlayers=4,
         max_len=48,
     ).to(device)
 
@@ -444,9 +494,10 @@ def train():
                 "tokenizer": tokenizer,
                 "vocab_size": tokenizer.vocab_size,
                 "feat_dim": feat_dim,
-                "d_model": 256,
-                "nlayers": 2,
-                "model_type": "GRU",
+                "d_model": 192,
+                "nhead": 6,
+                "nlayers": 4,
+                "model_type": "CausalTransformer",
                 "DMG_TO_IDX": DMG_TO_IDX,
                 "LOC_TO_IDX": LOC_TO_IDX,
                 "N_DMG": N_DMG,
@@ -465,11 +516,12 @@ def train():
 def load_recap_model(path: str = "models/recap_model.pt"):
     ckpt = torch.load(path, map_location="cpu")
     tokenizer = ckpt["tokenizer"]
-    model = RecapGRU(
+    model = CausalTransformer(
         vocab_size=ckpt["vocab_size"],
         feat_dim=ckpt["feat_dim"],
         d_model=ckpt["d_model"],
-        nlayers=ckpt.get("nlayers", 2),
+        nhead=ckpt.get("nhead", 6),
+        nlayers=ckpt.get("nlayers", 4),
     )
     model.load_state_dict(ckpt["model_state"])
     model.eval()
