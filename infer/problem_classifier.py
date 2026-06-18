@@ -1,12 +1,12 @@
 """
 Problem Classifier — damage tracks → insurance problem category + recap
-Uses LLM for natural-language summary (falls back to rule-based).
+Uses trained transformer model for recap generation (falls back to rules).
 """
 
 import json
 import yaml
 from pathlib import Path
-from .recap_llm import LLMRecapGenerator
+from .recap_model_gen import RecapModelGenerator
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -17,7 +17,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
 class ProblemClassifier:
     """Maps detected damage tracks → insurance problem category."""
 
-    def __init__(self, config: dict, llm_model: str = ""):
+    def __init__(self, config: dict, recap_model_path: str = ""):
         self.config = config
         self.rules = config["problem_rules"]
         self.severity_rules = config["severity"]
@@ -25,15 +25,15 @@ class ProblemClassifier:
         self.car_class_names = {self.classes[i] for i in config["car_classes"]}
         self.house_class_names = {self.classes[i] for i in config["house_classes"]}
 
-        # LLM recap generator (optional)
-        self.llm = None
-        if llm_model:
-            self.llm = LLMRecapGenerator(model=llm_model)
-            if self.llm.available:
-                print(f"  LLM recap enabled (model: {llm_model})")
+        # Trained recap model (optional)
+        self.recap_gen = None
+        if recap_model_path:
+            self.recap_gen = RecapModelGenerator(model_path=recap_model_path)
+            if self.recap_gen.available:
+                print(f"  Recap model enabled ({recap_model_path})")
             else:
-                print(f"  ! LLM not available at {self.llm.server_url}, using rule-based recap")
-                self.llm = None
+                print(f"  ! Recap model not found at {recap_model_path}, using rule-based")
+                self.recap_gen = None
 
     def classify(self, tracks: list[dict]) -> tuple[str, str, str]:
         """
@@ -98,9 +98,9 @@ class ProblemClassifier:
             "tracks": damage_list,
         }
 
-        # Generate summary: LLM if available, else rule-based
-        if self.llm and self.llm.available:
-            recap["summary"] = self.llm.generate(recap)
+        # Generate summary: trained model if available, else rule-based
+        if self.recap_gen and self.recap_gen.available:
+            recap["summary"] = self.recap_gen.generate(recap)
         else:
             recap["summary"] = self._rule_summary(recap)
 
@@ -133,11 +133,11 @@ class ProblemClassifier:
 
 
 def run_classifier(tracks_json: str, output_json: str, config_path: str = "config.yaml",
-                   llm_model: str = ""):
+                   recap_model_path: str = ""):
     with open(tracks_json) as f:
         tracks = json.load(f)
     config = load_config(config_path)
-    classifier = ProblemClassifier(config, llm_model=llm_model)
+    classifier = ProblemClassifier(config, recap_model_path=recap_model_path)
     recap = classifier.generate_recap(tracks)
     with open(output_json, "w") as f:
         json.dump(recap, f, indent=2)
