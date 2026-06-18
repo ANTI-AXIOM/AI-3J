@@ -1,0 +1,81 @@
+names:
+- bosse_aile_arriere_droite
+- bosse_aile_arriere_gauche
+- bosse_aile_avant_droite
+- bosse_aile_avant_gauche
+- bosse_capot
+- bosse_malle
+- bosse_pare_chocs_arriere
+- bosse_pare_chocs_avant
+- bosse_porte_arriere_droite
+- bosse_porte_arriere_gauche
+- bosse_porte_avant_droite
+- bosse_porte_avant_gauche
+- casse_feu_arriere
+- casse_pare_brise
+- casse_phare_avant
+- casse_vitre
+- cassure_capot
+- cassure_pare_chocs_arriere
+- cassure_pare_chocs_avant
+- cassure_retroviseur
+- ecrasement_aile_arriere_droit
+- ecrasement_aile_arriere_gauche
+- ecrasement_aile_avant_droite
+- ecrasement_aile_avant_gauche
+- ecrasement_capot
+- ecrasement_malle
+- ecrasement_pare_chocs_arriere
+- ecrasement_pare_chocs_avant
+- ecrasement_porte_arriere_droite
+- ecrasement_porte_arriere_gauche
+- ecrasement_porte_avant
+- ecrasement_porte_avant_droite
+- ecrasement_porte_avant_gauche
+- ecrasement_toit
+- fissure_aile_arriere_droite
+- fissure_aile_arriere_gauche
+- fissure_aile_avant_droite
+- fissure_aile_avant_gauche
+- fissure_capot
+- fissure_pare_chocs_arriere
+- fissure_pare_chocs_avant
+- fissure_porte_arriere_droite
+- fissure_porte_arriere_gauche
+- fissure_porte_avant_droite
+- fissure_porte_avant_gauche
+- impact_pare_brise
+- impact_vitre
+- peinture_ecaillee_aile_arriere_droite
+- peinture_ecaillee_aile_arriere_gauche
+- peinture_ecaillee_aile_avant_droite
+- peinture_ecaillee_aile_avant_gauche
+- peinture_ecaillee_capot
+- peinture_ecaillee_malle
+- peinture_ecaillee_pare_chocs_arriere
+- peinture_ecaillee_pare_chocs_avant
+- peinture_ecaillee_porte_arriere_droite
+- peinture_ecaillee_porte_arriere_gauche
+- peinture_ecaillee_porte_avant_droite
+- peinture_ecaillee_porte_avant_gauche
+- rayure_aile_arriere_droite
+- rayure_aile_arriere_gauche
+- rayure_aile_avant_droite
+- rayure_aile_avant_gauche
+- rayure_pare_chocs_arriere
+- rayure_pare_chocs_avant
+- rayure_porte_arriere_droite
+- rayure_porte_arriere_gauche
+- rayure_porte_avant_droite
+- rayure_porte_avant_gauche
+nc: 69
+path: car_damage
+roboflow:
+  license: Public Domain
+  project: mae-car-damage
+  url: https://universe.roboflow.com/car-damage-detection-ovyfh/mae-car-damage/dataset/7
+  version: 7
+  workspace: car-damage-detection-ovyfh
+test: test/images
+train: train/images
+val: valid/images

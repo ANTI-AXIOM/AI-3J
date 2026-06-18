@@ -1,0 +1,40 @@
+names:
+- Blown render - trapped moisture
+- Brick Algae
+- Brick Efflorescence
+- Broke or Loose Roof tile
+- Condensation
+- Damaged Render
+- Flaking paint - trapped moisture
+- Lichen Growth
+- Rising Damp
+- Spalled Brickwork
+- blocked air vent
+- breached dpc
+- distortion to chimney
+- drying out or shrinkage of plaster internally
+- drying out orshrinkage of plaster
+- internal cracking
+- mould growth
+- penetrating or rising damp
+- potential leak or ingress of water
+- sill to header cracking - structural defect
+- stepped cracking - structural defect
+- structural cracking
+- structural cracking and trapped moisture
+- structural defect and trapped water
+- structural defect to chimney breast
+- trapped moisture
+- trapped moisture to chimney shoulder
+- trapped moisture to chimney stack
+nc: 28
+path: property_damage
+roboflow:
+  license: Public Domain
+  project: property-defect-issues
+  url: https://universe.roboflow.com/ai-defect-sqnak/property-defect-issues/dataset/2
+  version: 2
+  workspace: ai-defect-sqnak
+test: test/images
+train: train/images
+val: valid/images

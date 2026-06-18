@@ -1,0 +1,96 @@
+# Pipeline Configuration — Insurance Damage Video Analysis
+
+paths:
+  videos_dir: "data/videos"
+  keyframes_dir: "data/keyframes"
+  labels_dir: "data/labels"
+  model_dir: "models"
+  export_dir: "export"
+
+extraction:
+  scene_threshold: 30.0          # scenedetect content-aware threshold
+  blur_variance_min: 100         # Laplacian variance; below = blurry, discard
+  dedup_corr_threshold: 0.95     # histogram correlation; above = duplicate
+  max_keyframes_per_video: 50
+
+model:
+  name: "yolo11n.pt"
+  imgsz: 640
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  device: "cpu"                  # "cpu" or "cuda:0"
+
+training:
+  epochs: 100
+  batch: 8
+  lr: 0.01
+  patience: 20
+  augment:
+    mosaic: 0.5
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 10
+    scale: 0.5
+
+temporal_agg:
+  iou_threshold: 0.3
+  min_track_frames: 2
+  location_map:
+    "dent": ["hood", "door", "fender", "roof"]
+    "crack": ["bumper", "windshield", "wall", "window"]
+    "scratch": ["door", "bumper", "fender", "wall"]
+    "broken_glass": ["windshield", "window", "headlight"]
+    "water_damage": ["ceiling", "wall", "floor"]
+    "structural_crack": ["wall", "foundation", "ceiling"]
+
+recap:
+  max_output_keyframes: 5
+
+classes:
+  0: "broken_glass"
+  1: "broken_window"
+  2: "collision_damage"
+  3: "crack"
+  4: "dent"
+  5: "fire_damage"
+  6: "mold"
+  7: "paint_peel"
+  8: "roof_damage"
+  9: "scratch"
+  10: "storm_debris"
+  11: "structural_crack"
+  12: "water_damage"
+  13: "wheel_damage"
+
+# which classes are car vs house damage
+car_classes: [0, 2, 3, 4, 7, 9, 13]
+house_classes: [1, 5, 6, 8, 10, 11, 12]
+
+problem_rules:
+  collision:
+    requires: ["dent", "scratch", "collision_damage", "broken_glass", "wheel_damage"]
+    min_classes: 1
+  water_damage:
+    requires: ["water_damage", "mold"]
+    min_classes: 1
+  fire_damage:
+    requires: ["fire_damage"]
+    min_classes: 1
+  storm_impact:
+    requires: ["structural_crack", "roof_damage", "broken_window", "storm_debris"]
+    min_classes: 1
+  wear_tear:
+    requires: ["paint_peel"]
+    min_classes: 1
+
+severity:
+  low:
+    max_classes: 1
+    max_area_fraction: 0.05
+    min_conf: 0.6
+  medium:
+    max_classes: 2
+    max_area_fraction: 0.20
+  high:
+    min_classes: 3
