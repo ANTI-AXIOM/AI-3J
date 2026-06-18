@@ -286,44 +286,31 @@ class RecapDataset(Dataset):
 # ──────────────────────────────────────────────
 # IMPROVED TRANSFORMER (d_model=384, 4 layers)
 # ──────────────────────────────────────────────
-class RecapTransformer(nn.Module):
-    """~1.6M params, d_model=128, 3 layers, 4 heads, vocab=4000."""
+class RecapGRU(nn.Module):
+    """GRU-based decoder. ~200K params, trains 5-10× faster than transformer."""
 
-    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 128,
-                 nhead: int = 4, nlayers: int = 3, max_len: int = 48):
+    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 256,
+                 nlayers: int = 2, max_len: int = 48):
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
 
-        self.feat_proj = nn.Sequential(
-            nn.Linear(feat_dim, d_model),
-            nn.LayerNorm(d_model),
-            nn.GELU(),
-        )
-
+        self.feat_proj = nn.Linear(feat_dim, d_model)
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_len, d_model)
-        self.dropout = nn.Dropout(0.1)
 
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=256,
-            dropout=0.1, batch_first=True, activation="gelu",
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=nlayers)
+        self.gru = nn.GRU(d_model, d_model, num_layers=nlayers,
+                          batch_first=True, dropout=0.2 if nlayers > 1 else 0)
         self.out = nn.Linear(d_model, vocab_size)
-        self._init_weights()
-
-    def _init_weights(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, features: torch.Tensor, target_tokens: Optional[torch.Tensor] = None,
                 teacher_forcing: bool = True) -> torch.Tensor:
         batch_size = features.size(0)
         device = features.device
 
-        memory = self.feat_proj(features).unsqueeze(1)
+        # Initial hidden state from features
+        h0 = self.feat_proj(features).unsqueeze(0).repeat(self.gru.num_layers, 1, 1)
 
         if teacher_forcing and target_tokens is not None:
             tgt = target_tokens[:, :-1]
@@ -331,61 +318,24 @@ class RecapTransformer(nn.Module):
             pos_ids = torch.arange(tgt.size(1), device=device).unsqueeze(0)
             tgt_emb = tgt_emb + self.pos_embed(pos_ids)
             tgt_emb = self.dropout(tgt_emb)
-            tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-                tgt.size(1), device=device)
-            out = self.decoder(tgt_emb, memory.repeat(1, tgt.size(1), 1), tgt_mask=tgt_mask)
+            out, _ = self.gru(tgt_emb, h0)
             return self.out(out)
         else:
+            # Autoregressive generation
             generated = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
+            h = h0
             for step in range(self.max_len - 1):
-                tgt_emb = self.token_embed(generated) * (self.d_model ** 0.5)
-                pos_ids = torch.arange(generated.size(1), device=device).unsqueeze(0)
-                tgt_emb = tgt_emb + self.pos_embed(pos_ids)
-                tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-                    generated.size(1), device=device)
-                out = self.decoder(tgt_emb, memory.repeat(1, generated.size(1), 1), tgt_mask=tgt_mask)
-                logits = self.out(out[:, -1:, :])
-                next_token = logits.argmax(dim=-1)
+                tgt_emb = self.token_embed(generated[:, -1:]) * (self.d_model ** 0.5)
+                pos = torch.full((batch_size, 1), min(step, self.max_len - 1),
+                                 dtype=torch.long, device=device)
+                tgt_emb = tgt_emb + self.pos_embed(pos)
+                out_step, h = self.gru(tgt_emb, h)
+                logits = self.out(out_step[:, 0, :])
+                next_token = logits.argmax(dim=-1).unsqueeze(1)
                 generated = torch.cat([generated, next_token], dim=1)
                 if (next_token == EOS).all():
                     break
             return generated
-
-    @torch.no_grad()
-    def beam_search(self, features: torch.Tensor, beam_size: int = 3,
-                    max_len: int = 48) -> torch.Tensor:
-        """Beam search decoding for better output quality."""
-        device = features.device
-        batch_size = features.size(0)
-        memory = self.feat_proj(features).unsqueeze(1)
-        sos = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
-        beams = [(sos, 0.0)]
-
-        for step in range(max_len - 1):
-            candidates = []
-            for seq, score in beams:
-                if seq[0, -1].item() == EOS:
-                    candidates.append((seq, score))
-                    continue
-                tgt_emb = self.token_embed(seq) * (self.d_model ** 0.5)
-                pos_ids = torch.arange(seq.size(1), device=device).unsqueeze(0)
-                tgt_emb = tgt_emb + self.pos_embed(pos_ids)
-                tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-                    seq.size(1), device=device)
-                out = self.decoder(tgt_emb, memory.repeat(1, seq.size(1), 1), tgt_mask=tgt_mask)
-                logits = self.out(out[:, -1:, :]).squeeze(1)
-                log_probs = F.log_softmax(logits, dim=-1)
-                topk = log_probs.topk(beam_size, dim=-1)
-                for i in range(beam_size):
-                    token = topk.indices[0, i].unsqueeze(0).unsqueeze(0)
-                    new_seq = torch.cat([seq, token], dim=1)
-                    new_score = score + topk.values[0, i].item()
-                    candidates.append((new_seq, new_score))
-            candidates.sort(key=lambda x: x[1], reverse=True)
-            beams = candidates[:beam_size]
-            if all(b[0, 0, -1].item() == EOS for b, _ in beams):
-                break
-        return beams[0][0]
 
 
 # ──────────────────────────────────────────────
@@ -397,7 +347,7 @@ def train():
     print(f"Training on {device}")
 
     # Generate diverse synthetic data
-    n_samples = 100000
+    n_samples = 20000
     print(f"Generating {n_samples} synthetic samples...")
     profiles, recaps = [], []
     for _ in range(n_samples):
@@ -419,12 +369,11 @@ def train():
 
     # Model
     feat_dim = N_DMG + N_LOC + 7  # damages + locations + asset(3) + sev(3) + count(1)
-    model = RecapTransformer(
+    model = RecapGRU(
         vocab_size=tokenizer.vocab_size,
         feat_dim=feat_dim,
-        d_model=384,
-        nhead=8,
-        nlayers=4,
+        d_model=256,
+        nlayers=2,
         max_len=48,
     ).to(device)
 
@@ -435,7 +384,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4,
                                    betas=(0.9, 0.98))
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 20,
+        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 10,
         pct_start=0.1, anneal_strategy="cos",
     )
     criterion = nn.CrossEntropyLoss(ignore_index=PAD)
@@ -443,7 +392,7 @@ def train():
     Path("models").mkdir(exist_ok=True)
     best_loss = float("inf")
 
-    for epoch in range(20):
+    for epoch in range(10):
         model.train()
         total_loss = 0
         for feats, labels in train_loader:
@@ -495,9 +444,9 @@ def train():
                 "tokenizer": tokenizer,
                 "vocab_size": tokenizer.vocab_size,
                 "feat_dim": feat_dim,
-                "d_model": 128,
-                "nhead": 4,
-                "nlayers": 3,
+                "d_model": 256,
+                "nlayers": 2,
+                "model_type": "GRU",
                 "DMG_TO_IDX": DMG_TO_IDX,
                 "LOC_TO_IDX": LOC_TO_IDX,
                 "N_DMG": N_DMG,
@@ -516,12 +465,11 @@ def train():
 def load_recap_model(path: str = "models/recap_model.pt"):
     ckpt = torch.load(path, map_location="cpu")
     tokenizer = ckpt["tokenizer"]
-    model = RecapTransformer(
+    model = RecapGRU(
         vocab_size=ckpt["vocab_size"],
         feat_dim=ckpt["feat_dim"],
         d_model=ckpt["d_model"],
-        nhead=ckpt.get("nhead", 8),
-        nlayers=ckpt.get("nlayers", 4),
+        nlayers=ckpt.get("nlayers", 2),
     )
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -529,13 +477,10 @@ def load_recap_model(path: str = "models/recap_model.pt"):
 
 
 def generate(profile: dict, model: nn.Module, tokenizer: SimpleTokenizer,
-             use_beam: bool = True, device: str = "cpu") -> str:
+             device: str = "cpu") -> str:
     feat = encode_features(profile).unsqueeze(0).to(device)
     with torch.no_grad():
-        if use_beam:
-            tokens = model.beam_search(feat, beam_size=3)
-        else:
-            tokens = model(feat, teacher_forcing=False)
+        tokens = model(feat, teacher_forcing=False)
     return tokenizer.decode(tokens[0].tolist())
 
 

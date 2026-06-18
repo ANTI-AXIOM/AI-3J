@@ -7,13 +7,12 @@ from recap_model import load_recap_model, generate
 
 
 class RecapModelGenerator:
-    """Generates recaps using the trained transformer model."""
+    """Generates recaps using the trained GRU model."""
 
-    def __init__(self, model_path: str = "models/recap_model.pt", use_beam: bool = True):
+    def __init__(self, model_path: str = "models/recap_model.pt"):
         self.model_path = Path(model_path)
         self.model = None
         self.tokenizer = None
-        self.use_beam = use_beam
         self.device = "cpu"
 
     @property
@@ -34,5 +33,4 @@ class RecapModelGenerator:
     def generate(self, recap_data: dict) -> str:
         if self.model is None:
             self.load()
-        return generate(recap_data, self.model, self.tokenizer,
-                        use_beam=self.use_beam, device=self.device)
+        return generate(recap_data, self.model, self.tokenizer, device=self.device)
