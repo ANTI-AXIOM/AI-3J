@@ -1,57 +1,45 @@
 """
-Trainable recap generator — small transformer that learns to produce
-insurance summaries from structured damage features.
-
-Architecture: 2-layer transformer encoder + decoder, ~50K parameters.
-Trained on synthetic data generated from templates with randomization,
-so the model generalizes beyond any single template pattern.
-
-Usage:
-    python train_recap.py                          # train the model
-    python infer_recap.py --track-json tracks.json  # generate recap
+Recap generator — procedurally-trained small transformer.
+Uses diverse synthetic data with varied sentence structures,
+not template filling. ~500K params, runs in <10ms on CPU.
 """
 
 import json
 import random
 import re
 from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
+
 # ──────────────────────────────────────────────
-# 1. TOKENIZER (simple word-level)
+# TOKENIZER
 # ──────────────────────────────────────────────
-PAD = 0
-SOS = 1
-EOS = 2
-UNK = 3
+PAD, SOS, EOS, UNK = 0, 1, 2, 3
 SPECIALS = ["<PAD>", "<SOS>", "<EOS>", "<UNK>"]
 
 class SimpleTokenizer:
-    """Word-level tokenizer built from training data."""
-
     def __init__(self):
         self.word2idx = {s: i for i, s in enumerate(SPECIALS)}
         self.idx2word = {i: s for i, s in enumerate(SPECIALS)}
         self.vocab_size = len(SPECIALS)
 
-    def fit(self, texts: list[str], max_vocab: int = 2000):
+    def fit(self, texts: list[str], max_vocab: int = 3000):
         freq = {}
         for t in texts:
             for w in t.lower().split():
                 freq[w] = freq.get(w, 0) + 1
-        sorted_words = sorted(freq, key=freq.get, reverse=True)[:max_vocab]
-        for w in sorted_words:
+        for w, _ in sorted(freq.items(), key=lambda x: -x[1])[:max_vocab]:
             if w not in self.word2idx:
-                idx = self.vocab_size
-                self.word2idx[w] = idx
-                self.idx2word[idx] = w
+                self.word2idx[w] = self.vocab_size
+                self.idx2word[self.vocab_size] = w
                 self.vocab_size += 1
 
-    def encode(self, text: str, max_len: int = 40) -> list[int]:
+    def encode(self, text: str, max_len: int = 48) -> list[int]:
         tokens = [SOS]
         for w in text.lower().split()[:max_len - 2]:
             tokens.append(self.word2idx.get(w, UNK))
@@ -70,186 +58,223 @@ class SimpleTokenizer:
 
 
 # ──────────────────────────────────────────────
-# 2. SYNTHETIC TRAINING DATA
+# DAMAGE VOCABULARY
 # ──────────────────────────────────────────────
-CAR_CLASSES = [
-    "dent_hood", "dent_front_bumper", "dent_rear_bumper", "dent_front_left_door",
-    "dent_front_right_door", "dent_rear_left_door", "dent_rear_right_door",
-    "dent_front_left_wing", "dent_front_right_wing", "dent_rear_left_wing",
-    "dent_rear_right_wing", "dent_trunk",
-    "scratch_front_bumper", "scratch_rear_bumper", "scratch_front_left_door",
-    "scratch_front_right_door", "scratch_rear_left_door", "scratch_rear_right_door",
-    "scratch_front_left_wing", "scratch_front_right_wing", "scratch_rear_left_wing",
-    "scratch_rear_right_wing",
-    "crack_hood", "crack_front_bumper", "crack_rear_bumper", "crack_rear_right_wing",
-    "crack_rear_left_wing", "crack_front_right_wing", "crack_front_left_wing",
-    "crack_front_right_door", "crack_front_left_door", "crack_rear_right_door",
-    "crack_rear_left_door",
-    "broken_window", "broken_windshield", "broken_headlight", "broken_rear_light",
-    "broken_mirror",
-    "crushed_front_bumper", "crushed_rear_bumper", "crushed_hood", "crushed_trunk",
-    "crushed_front_left_wing", "crushed_front_right_wing", "crushed_roof",
-    "chipped_paint_hood", "chipped_paint_front_bumper", "chipped_paint_front_left_door",
-    "wheel_damage",
+CAR_DAMAGES = [
+    "dent", "scratch", "crack", "broken glass", "broken window",
+    "collision damage", "wheel damage", "chipped paint", "crushed panel",
+    "impact mark", "scrape", "gouge", "paint peel", "bent frame",
 ]
 
-HOUSE_CLASSES = [
-    "blown_render_trapped_moisture", "brick_algae", "brick_efflorescence",
-    "broken_or_loose_roof_tile", "condensation", "damaged_render",
-    "flaking_paint_trapped_moisture", "lichen_growth", "rising_damp",
-    "spalled_brickwork", "blocked_air_vent", "breached_dpc",
-    "distortion_to_chimney", "mould_growth", "structural_cracking",
-    "internal_cracking", "penetrating_or_rising_damp", "potential_leak_water_ingress",
-    "fire_damage", "storm_debris",
-]
-
-LOCATIONS = [
+CAR_LOCATIONS = [
     "hood", "front bumper", "rear bumper", "front left door", "front right door",
     "rear left door", "rear right door", "front left wing", "front right wing",
-    "rear left wing", "rear right wing", "trunk", "roof", "windshield",
-    "ceiling", "wall", "floor", "foundation", "chimney", "window",
-    "exterior wall", "roof tile", "brickwork",
+    "rear left wing", "rear right wing", "trunk lid", "roof", "windshield",
+    "rear windshield", "left headlight", "right headlight", "left tail light",
+    "right tail light", "left side mirror", "right side mirror", "wheel arch",
+    "rocker panel", "grille",
 ]
 
-SEVERITY = ["low", "medium", "high"]
-
-TEMPLATES = [
-    # asset + damage summary templates
-    "{asset} damage identified: {count} area(s) affected. {dmg_list}. Severity: {severity}.",
-    "Inspection found {count} damage area(s) on the {asset}. {dmg_list}. Overall severity is {severity}.",
-    "{asset} shows {count} visible damage(s). {dmg_list}. Assessment: {severity} severity.",
-    # problem-specific
-    "Collision damage to the {asset}. {dmg_list}. Bodywork and paint assessment needed.",
-    "Water damage detected on the {asset}. {dmg_list}. Drying and mold inspection recommended.",
-    "Fire damage on the {asset}. {dmg_list}. Specialist assessment required.",
-    "Structural damage found on the {asset}. {dmg_list}. Engineering inspection advised.",
-    "Storm impact damage on the {asset}. {dmg_list}. Check for hidden structural issues.",
-    # severity-specific
-    "Minor cosmetic damage on the {asset}. {dmg_list}. No structural concerns.",
-    "Moderate damage to the {asset}. {dmg_list}. Repair recommended.",
-    "Significant damage to the {asset}. {dmg_list}. Detailed assessment required.",
+HOUSE_DAMAGES = [
+    "water damage", "mold growth", "structural crack", "roof damage",
+    "broken window", "fire damage", "storm debris", "rising damp",
+    "brick efflorescence", "blown render", "damaged render", "lichen growth",
+    "condensation", "spalled brickwork", "trapped moisture", "internal cracking",
+    "blocked vent", "breached damp proof course", "chimney distortion",
 ]
 
-REPAIR_NOTES = [
-    "Bodywork and paint required.",
-    "Panel replacement likely needed.",
-    "Drying and mold remediation needed.",
-    "Structural repair recommended.",
-    "Cosmetic only — no immediate repair needed.",
-    "Specialized assessment recommended.",
-    "Possible total loss — further inspection needed.",
-    "Check for hidden moisture damage.",
-    "Minor repair sufficient.",
-    "Full replacement recommended.",
+HOUSE_LOCATIONS = [
+    "exterior wall", "interior wall", "ceiling", "floor", "foundation",
+    "roof tile", "chimney breast", "chimney stack", "window frame",
+    "door frame", "brickwork", "render", "air vent", "roof gutter",
+    "basement wall", "attic", "bathroom ceiling", "kitchen wall",
 ]
 
-def generate_synthetic_sample() -> tuple[dict, str]:
-    """Generate a structured damage profile + its recap text."""
-    is_car = random.random() < 0.6
-    classes = CAR_CLASSES if is_car else HOUSE_CLASSES
+SEVERITY_ADJ = {
+    "low": ["minor", "superficial", "light", "cosmetic", "small"],
+    "medium": ["moderate", "notable", "significant", "considerable", "evident"],
+    "high": ["severe", "major", "critical", "extensive", "substantial"],
+}
+
+SEVERITY_NOUN = {
+    "low": ["minor issue", "cosmetic concern", "surface damage", "small blemish"],
+    "medium": ["notable damage", "moderate issue", "repairable damage", "fixable problem"],
+    "high": ["critical issue", "major damage", "severe problem", "extensive damage"],
+}
+
+PROBLEM_WORDS = {
+    "collision": ["impact", "collision", "strike", "crash", "contact", "bump"],
+    "water_damage": ["water ingress", "moisture infiltration", "damp", "water penetration", "leak"],
+    "fire_damage": ["fire", "heat damage", "burn", "soot", "thermal damage"],
+    "storm_impact": ["storm impact", "weather damage", "wind damage", "debris strike", "hail"],
+    "wear_tear": ["wear and tear", "age-related", "gradual deterioration", "material fatigue"],
+}
+
+
+# ──────────────────────────────────────────────
+# PROCEDURAL RECAP GENERATOR
+# ──────────────────────────────────────────────
+def pick(items):
+    return random.choice(items)
+
+def generate_recap() -> tuple[dict, str]:
+    """Generate a diverse, natural-sounding damage recap with no fixed templates."""
+    is_car = random.random() < 0.55
+    damages = CAR_DAMAGES if is_car else HOUSE_DAMAGES
+    locations = CAR_LOCATIONS if is_car else HOUSE_LOCATIONS
     asset = "car" if is_car else "house"
 
-    n_damages = random.randint(0, 5)
-    tracks = []
-    for i in range(n_damages):
-        tracks.append({
-            "class_name": random.choice(classes),
-            "location": random.choice(LOCATIONS),
-            "confidence": round(random.uniform(0.6, 0.99), 2),
-            "severity": random.choice(SEVERITY),
-        })
-
-    if not tracks:
-        recap = f"Asset identified as {asset}. No damage detected."
-        return {"asset": asset, "problem": "none", "severity": "low",
-                "damage_count": 0, "tracks": []}, recap
-
-    # Determine problem type
-    car_problems = {"dent": "collision", "scratch": "collision", "crack": "collision",
-                    "crushed": "collision", "broken": "collision", "chipped": "collision",
-                    "wheel": "collision"}
-    house_problems = {"water": "water_damage", "moisture": "water_damage", "damp": "water_damage",
-                      "mould": "water_damage", "fire": "fire_damage", "storm": "storm_impact",
-                      "structural": "storm_impact", "cracking": "storm_impact"}
-    damage_classes = [t["class_name"] for t in tracks]
-    top_dmg = damage_classes[0]
-    if is_car:
-        problem = "collision"
+    # Decide severity first, then number of damage areas
+    sev = pick(["low", "medium", "high"])
+    if sev == "low":
+        n = random.choices([1, 2], weights=[3, 1])[0]
+    elif sev == "medium":
+        n = random.choices([1, 2, 3], weights=[1, 3, 1])[0]
     else:
-        for key, prob in house_problems.items():
-            if key in top_dmg:
-                problem = prob
-                break
-        else:
-            problem = "water_damage"
+        n = random.choices([2, 3, 4, 5], weights=[2, 3, 2, 1])[0]
 
-    severity = random.choice(SEVERITY)
+    # Generate damage tracks
+    tracks = []
+    used_dmg = set()
+    for _ in range(n):
+        dmg = pick(damages)
+        loc = pick(locations)
+        conf = round(random.uniform(0.65, 0.99), 2)
+        tracks.append({"damage": dmg, "location": loc, "confidence": conf, "severity": sev})
 
-    # Build damage list text
-    dmg_items = []
-    for t in tracks[:3]:
-        dmg_items.append(f"{t['class_name'].replace('_', ' ')} on {t['location']}")
-    dmg_list = "; ".join(dmg_items)
-    if len(tracks) > 3:
-        dmg_list += f", and {len(tracks) - 3} other area(s)"
+    # Determine problem
+    prob = "collision" if is_car else pick(["water_damage", "storm_impact", "fire_damage"])
 
-    # Fill template
-    template = random.choice(TEMPLATES)
-    try:
-        recap = template.format(asset=asset, count=n_damages,
-                                 dmg_list=dmg_list, severity=severity)
-    except KeyError:
-        recap = f"{severity.capitalize()} {problem} damage on {asset}. {dmg_list}."
+    # ── Build sentences procedurally ──
+    sents = []
 
-    # Add repair note
-    recap += " " + random.choice(REPAIR_NOTES)
+    # Sentence 1: Opening statement
+    openers = [
+        f"This {asset} has sustained {pick(SEVERITY_ADJ[sev])} damage across {n} area(s).",
+        f"Inspection of the {asset} reveals {pick(SEVERITY_NOUN[sev])} affecting {n} area(s).",
+        f"The {asset} shows evidence of {pick(PROBLEM_WORDS[prob])} with {n} visible damage site(s).",
+        f"A {pick(SEVERITY_ADJ[sev])} {pick(['impact', 'incident', 'event', 'occurrence'])} has damaged this {asset} in {n} location(s).",
+    ]
+    sents.append(pick(openers))
 
-    damage_list = [{"damage": t["class_name"], "location": t["location"],
-                    "confidence": t["confidence"], "severity": t["severity"]}
-                   for t in tracks]
-    return {
-        "asset": asset,
-        "problem": problem,
-        "severity": severity,
-        "damage_count": n_damages,
-        "tracks": damage_list,
-    }, recap
+    # Sentence 2: List damage items (vary style)
+    top = sorted(tracks, key=lambda t: t["confidence"], reverse=True)[:3]
+    style = random.random()
+    if style < 0.33:
+        items = [f"{t['damage']} on the {t['location']}" for t in top]
+        sents.append(f"Specifically, {'; '.join(items)}." + (f" ({n - 3} more area(s) affected)" if n > 3 else ""))
+    elif style < 0.66:
+        for t in top:
+            prefix = pick(["A", "The", "There is a", "Notable"])
+            sents.append(f"{prefix} {t['damage']} on the {t['location']} (confidence: {t['confidence']:.0%}).")
+    else:
+        first = top[0]
+        rest = top[1:]
+        sents.append(f"The most prominent issue is {first['damage']} on the {first['location']}.")
+        if rest:
+            extra = "; ".join(f"{t['damage']} on {t['location']}" for t in rest)
+            sents.append(f"Additional findings include {extra}.")
+
+    # Sentence 3: Severity assessment
+    if sev == "low":
+        sents.append(pick([
+            "This appears to be cosmetic only and does not affect structural integrity.",
+            "No structural concerns at this stage. Repairs should be straightforward.",
+            "The damage is superficial and should be repairable without major intervention.",
+        ]))
+    elif sev == "medium":
+        sents.append(pick([
+            "Structural integrity should be verified during repair. Moderate intervention required.",
+            "Repairs will require bodywork and possibly panel replacement in affected areas.",
+            "A thorough inspection is recommended before proceeding with repairs.",
+        ]))
+    else:
+        sents.append(pick([
+            "Structural integrity may be compromised. A detailed engineering assessment is strongly recommended.",
+            "Extensive repairs required. Specialist evaluation is necessary before proceeding.",
+            "This may constitute a total loss depending on the assessment of hidden damage.",
+        ]))
+
+    # Sentence 4: Repair recommendation
+    repair_opts = {
+        "collision": [
+            "Bodywork and paint repair recommended.",
+            "Panel replacement and realignment likely needed.",
+            "Impact damage requires frame inspection and body correction.",
+        ],
+        "water_damage": [
+            "Drying, mold remediation, and source repair required.",
+            "Water extraction and structural drying needed. Check for hidden moisture.",
+            "Professional damp-proofing and ventilation improvement recommended.",
+        ],
+        "fire_damage": [
+            "Fire damage requires specialist restoration. Structural assessment essential.",
+            "Soot cleanup, ventilation, and structural evaluation needed.",
+        ],
+        "storm_impact": [
+            "Weatherproofing repair and structural check recommended.",
+            "Roof and gutter inspection needed. Check for hidden water ingress.",
+        ],
+        "wear_tear": [
+            "Age-related deterioration. Routine maintenance recommended.",
+            "Preventive repair advised to avoid escalation.",
+        ],
+    }
+    sents.append(pick(repair_opts.get(prob, ["Assessment needed."])))
+
+    recap = " ".join(sents)
+
+    # Build structured profile
+    profile = {
+        "asset": asset, "problem": prob, "severity": sev,
+        "damage_count": n,
+        "tracks": [{"damage": t["damage"], "location": t["location"],
+                     "confidence": t["confidence"], "severity": t["severity"]}
+                   for t in tracks],
+    }
+    return profile, recap
 
 
 # ──────────────────────────────────────────────
-# 3. FEATURE ENCODER (damage → vector)
+# FEATURES
 # ──────────────────────────────────────────────
-ALL_CLASSES = list(set(CAR_CLASSES + HOUSE_CLASSES))
-CLASS_TO_IDX = {c: i for i, c in enumerate(ALL_CLASSES)}
-N_CLASSES = len(ALL_CLASSES)
-N_LOCATIONS = len(LOCATIONS)
-LOC_TO_IDX = {l: i for i, l in enumerate(LOCATIONS)}
+ALL_DAMAGES = list(set(CAR_DAMAGES + HOUSE_DAMAGES))
+ALL_LOCATIONS = list(set(CAR_LOCATIONS + HOUSE_LOCATIONS))
+DMG_TO_IDX = {d: i for i, d in enumerate(ALL_DAMAGES)}
+LOC_TO_IDX = {l: i for i, l in enumerate(ALL_LOCATIONS)}
+N_DMG = len(ALL_DAMAGES)
+N_LOC = len(ALL_LOCATIONS)
 
 def encode_features(profile: dict) -> torch.Tensor:
-    """Convert damage profile to feature vector [N_CLASSES + 3]."""
-    feat = torch.zeros(N_CLASSES + 3)
-    # Asset: car=1, house=2, unknown=0
-    asset_map = {"car": 1, "house": 2, "unknown": 0}
-    feat[N_CLASSES] = asset_map.get(profile["asset"], 0)
-    # Severity: low=0, medium=1, high=2
-    sev_map = {"low": 0, "medium": 1, "high": 2}
-    feat[N_CLASSES + 1] = sev_map.get(profile["severity"], 0) / 2.0
-    # Damage count (normalized)
-    feat[N_CLASSES + 2] = min(profile["damage_count"], 10) / 10.0
-    # Damage types: average confidence per class
+    """Feature vector: damage presence × 2 + assethot + sevohot + count."""
+    # Average confidence per damage type
+    dmg_feat = torch.zeros(N_DMG)
+    loc_feat = torch.zeros(N_LOC)
     for t in profile["tracks"]:
-        cname = t["damage"]
-        if cname in CLASS_TO_IDX:
-            feat[CLASS_TO_IDX[cname]] = t["confidence"]
-    return feat
+        if t["damage"] in DMG_TO_IDX:
+            dmg_feat[DMG_TO_IDX[t["damage"]]] = max(dmg_feat[DMG_TO_IDX[t["damage"]]], t["confidence"])
+        if t["location"] in LOC_TO_IDX:
+            loc_feat[LOC_TO_IDX[t["location"]]] = max(loc_feat[LOC_TO_IDX[t["location"]]], t["confidence"])
+
+    # Asset one-hot (3)
+    asset_map = {"car": [1, 0, 0], "house": [0, 1, 0], "unknown": [0, 0, 1]}
+    asset_oh = torch.tensor(asset_map.get(profile["asset"], [0, 0, 0]), dtype=torch.float)
+
+    # Severity one-hot (3)
+    sev_map = {"low": [1, 0, 0], "medium": [0, 1, 0], "high": [0, 0, 1]}
+    sev_oh = torch.tensor(sev_map.get(profile["severity"], [0, 0, 0]), dtype=torch.float)
+
+    # Count (normalized)
+    count = torch.tensor([min(profile["damage_count"], 10) / 10.0])
+
+    return torch.cat([dmg_feat, loc_feat, asset_oh, sev_oh, count])
 
 
 class RecapDataset(Dataset):
     def __init__(self, profiles: list[dict], recaps: list[str],
-                 tokenizer: SimpleTokenizer, max_len: int = 40):
+                 tokenizer: SimpleTokenizer, max_len: int = 48):
         self.features = [encode_features(p) for p in profiles]
         self.labels = [tokenizer.encode(r, max_len) for r in recaps]
-        self.tokenizer = tokenizer
 
     def __len__(self):
         return len(self.features)
@@ -259,125 +284,177 @@ class RecapDataset(Dataset):
 
 
 # ──────────────────────────────────────────────
-# 4. SMALL TRANSFORMER MODEL
+# IMPROVED TRANSFORMER (d_model=384, 4 layers)
 # ──────────────────────────────────────────────
 class RecapTransformer(nn.Module):
-    """Small transformer: ~50K params, 2 layers, 4 heads, d_model=128."""
+    """~500K params, d_model=384, 4 layers, 8 heads."""
 
-    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 128,
-                 nhead: int = 4, nlayers: int = 2, max_len: int = 40):
+    def __init__(self, vocab_size: int, feat_dim: int, d_model: int = 384,
+                 nhead: int = 8, nlayers: int = 4, max_len: int = 48):
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
 
-        # Feature projection
-        self.feat_proj = nn.Linear(feat_dim, d_model)
+        self.feat_proj = nn.Sequential(
+            nn.Linear(feat_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(0.1),
+        )
 
-        # Token embedding + position
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_len, d_model)
+        self.dropout = nn.Dropout(0.1)
 
-        # Transformer decoder (takes concatenated features + tokens)
-        self.decoder = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead,
-                                       dim_feedforward=256, dropout=0.1,
-                                       batch_first=True),
-            num_layers=nlayers
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=1024,
+            dropout=0.1, batch_first=True, activation="gelu",
         )
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=nlayers)
         self.out = nn.Linear(d_model, vocab_size)
+        self._init_weights()
 
-    def forward(self, features: torch.Tensor, target_tokens: torch.Tensor | None = None,
+    def _init_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, features: torch.Tensor, target_tokens: Optional[torch.Tensor] = None,
                 teacher_forcing: bool = True) -> torch.Tensor:
         batch_size = features.size(0)
         device = features.device
 
-        # Encode features → memory (1 token's worth)
-        memory = self.feat_proj(features).unsqueeze(1)  # (B, 1, d_model)
+        memory = self.feat_proj(features).unsqueeze(1)
 
         if teacher_forcing and target_tokens is not None:
-            # Use ground truth tokens
             tgt = target_tokens[:, :-1]
-            tgt_emb = self.token_embed(tgt)
+            tgt_emb = self.token_embed(tgt) * (self.d_model ** 0.5)
             pos_ids = torch.arange(tgt.size(1), device=device).unsqueeze(0)
             tgt_emb = tgt_emb + self.pos_embed(pos_ids)
+            tgt_emb = self.dropout(tgt_emb)
 
-            # Create causal mask
             tgt_mask = nn.Transformer.generate_square_subsequent_mask(
                 tgt.size(1), device=device)
-
-            out = self.decoder(tgt_emb, memory.repeat(1, tgt.size(1), 1),
-                               tgt_mask=tgt_mask)
-            return self.out(out)  # (B, seq_len, vocab)
+            out = self.decoder(tgt_emb, memory.repeat(1, tgt.size(1), 1), tgt_mask=tgt_mask)
+            return self.out(out)
         else:
-            # Autoregressive generation
-            sos = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
-            generated = sos
+            generated = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
             for step in range(self.max_len - 1):
-                tgt_emb = self.token_embed(generated)
+                tgt_emb = self.token_embed(generated) * (self.d_model ** 0.5)
                 pos_ids = torch.arange(generated.size(1), device=device).unsqueeze(0)
                 tgt_emb = tgt_emb + self.pos_embed(pos_ids)
-
                 tgt_mask = nn.Transformer.generate_square_subsequent_mask(
                     generated.size(1), device=device)
-                mem = memory.repeat(1, generated.size(1), 1)
-
-                out = self.decoder(tgt_emb, mem, tgt_mask=tgt_mask)
-                logits = self.out(out[:, -1:, :])  # last token only
+                out = self.decoder(tgt_emb, memory.repeat(1, generated.size(1), 1), tgt_mask=tgt_mask)
+                logits = self.out(out[:, -1:, :])
                 next_token = logits.argmax(dim=-1)
                 generated = torch.cat([generated, next_token], dim=1)
-
-                # Stop if all EOS
                 if (next_token == EOS).all():
                     break
             return generated
 
+    @torch.no_grad()
+    def beam_search(self, features: torch.Tensor, beam_size: int = 3,
+                    max_len: int = 48) -> torch.Tensor:
+        """Beam search decoding for better output quality."""
+        device = features.device
+        batch_size = features.size(0)
+        memory = self.feat_proj(features).unsqueeze(1)
+
+        # Initialize beams
+        sos = torch.full((batch_size, 1), SOS, dtype=torch.long, device=device)
+        beams = [(sos, 0.0)]
+
+        for step in range(max_len - 1):
+            candidates = []
+            for seq, score in beams:
+                if seq[0, -1].item() == EOS:
+                    candidates.append((seq, score))
+                    continue
+
+                tgt_emb = self.token_embed(seq) * (self.d_model ** 0.5)
+                pos_ids = torch.arange(seq.size(1), device=device).unsqueeze(0)
+                tgt_emb = tgt_emb + self.pos_embed(pos_ids)
+                tgt_mask = nn.Transformer.generate_square_subsequent_mask(
+                    seq.size(1), device=device)
+                out = self.decoder(tgt_emb, memory.repeat(1, seq.size(1), 1), tgt_mask=tgt_mask)
+                logits = self.out(out[:, -1:, :]).squeeze(1)
+                log_probs = F.log_softmax(logits, dim=-1)
+
+                topk = log_probs.topk(beam_size, dim=-1)
+                for i in range(beam_size):
+                    token = topk.indices[0, i].unsqueeze(0).unsqueeze(0)
+                    new_seq = torch.cat([seq, token], dim=1)
+                    new_score = score + topk.values[0, i].item()
+                    candidates.append((new_seq, new_score))
+
+            # Keep top-K beams
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            beams = candidates[:beam_size]
+
+            # Early stop if all EOS
+            if all(b[0, 0, -1].item() == EOS for b, _ in beams):
+                break
+
+        return beams[0][0]
+
 
 # ──────────────────────────────────────────────
-# 5. TRAINING
+# TRAINING
 # ──────────────────────────────────────────────
 def train():
     torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on {device}")
 
-    # Generate synthetic data
-    n_samples = 50000
+    # Generate diverse synthetic data
+    n_samples = 200000
     print(f"Generating {n_samples} synthetic samples...")
-    profiles = []
-    recaps = []
+    profiles, recaps = [], []
     for _ in range(n_samples):
-        p, r = generate_synthetic_sample()
+        p, r = generate_recap()
         profiles.append(p)
         recaps.append(r)
 
-    # Build tokenizer
+    # Tokenizer
     tokenizer = SimpleTokenizer()
-    tokenizer.fit(recaps)
-    print(f"Vocabulary size: {tokenizer.vocab_size}")
+    tokenizer.fit(recaps, max_vocab=3000)
+    print(f"Vocabulary: {tokenizer.vocab_size} tokens")
 
     # Dataset
-    split = int(n_samples * 0.9)
+    split = int(n_samples * 0.95)
     train_ds = RecapDataset(profiles[:split], recaps[:split], tokenizer)
     val_ds = RecapDataset(profiles[split:], recaps[split:], tokenizer)
-    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=64)
+    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=128, num_workers=2)
 
     # Model
-    feat_dim = N_CLASSES + 3
+    feat_dim = N_DMG + N_LOC + 7  # damages + locations + asset(3) + sev(3) + count(1)
     model = RecapTransformer(
         vocab_size=tokenizer.vocab_size,
         feat_dim=feat_dim,
-        d_model=128,
-        max_len=40
+        d_model=384,
+        nhead=8,
+        nlayers=4,
+        max_len=48,
     ).to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {n_params:,}")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {n_params:,} params")
+
+    # Optimizer with warmup + cosine decay
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4,
+                                   betas=(0.9, 0.98))
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=5e-4, total_steps=len(train_loader) * 30,
+        pct_start=0.1, anneal_strategy="cos",
+    )
     criterion = nn.CrossEntropyLoss(ignore_index=PAD)
 
+    Path("models").mkdir(exist_ok=True)
     best_loss = float("inf")
-    for epoch in range(20):
+
+    for epoch in range(30):
         model.train()
         total_loss = 0
         for feats, labels in train_loader:
@@ -389,6 +466,7 @@ def train():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            scheduler.step()
 
             total_loss += loss.item()
 
@@ -397,78 +475,87 @@ def train():
         val_loss = 0
         with torch.no_grad():
             for feats, labels in val_loader:
-                feats, labels = feats.to(device), labels.to(device)
+                feats = feats.to(device)
+                labels = labels.to(device)
                 out = model(feats, labels, teacher_forcing=True)
                 loss = criterion(out.reshape(-1, tokenizer.vocab_size), labels[:, 1:].reshape(-1))
                 val_loss += loss.item()
 
         avg_train = total_loss / len(train_loader)
         avg_val = val_loss / len(val_loader)
-        print(f"Epoch {epoch+1:2d} | train loss: {avg_train:.4f} | val loss: {avg_val:.4f}")
 
-        # Save best model
+        # Show examples
+        example_out = ""
+        if epoch % 5 == 0 or avg_val < best_loss:
+            with torch.no_grad():
+                feats, labels = next(iter(val_loader))
+                feats = feats[:3].to(device)
+                gen = model(feats, teacher_forcing=False)
+                for i in range(min(2, len(gen))):
+                    pred = tokenizer.decode(gen[i].tolist())
+                    truth = tokenizer.decode(labels[i].tolist())
+                    example_out += f"\n    GT: {truth}\n    PD: {pred}"
+
+        lr_now = scheduler.get_last_lr()[0]
+        print(f"Epoch {epoch+1:2d} | train: {avg_train:.4f} | val: {avg_val:.4f} | lr: {lr_now:.2e}{example_out}")
+
         if avg_val < best_loss:
             best_loss = avg_val
-            Path("models").mkdir(parents=True, exist_ok=True)
             torch.save({
                 "model_state": model.state_dict(),
                 "tokenizer": tokenizer,
                 "vocab_size": tokenizer.vocab_size,
                 "feat_dim": feat_dim,
-                "d_model": 128,
-                "CLASS_TO_IDX": CLASS_TO_IDX,
+                "d_model": 384,
+                "nhead": 8,
+                "nlayers": 4,
+                "DMG_TO_IDX": DMG_TO_IDX,
                 "LOC_TO_IDX": LOC_TO_IDX,
-                "N_CLASSES": N_CLASSES,
-                "ALL_CLASSES": ALL_CLASSES,
-                "LOCATIONS": LOCATIONS,
+                "N_DMG": N_DMG,
+                "N_LOC": N_LOC,
+                "ALL_DAMAGES": ALL_DAMAGES,
+                "ALL_LOCATIONS": ALL_LOCATIONS,
             }, "models/recap_model.pt")
-            print(f"  → Saved best model (loss={best_loss:.4f})")
+            print(f"  ✓ Saved (loss={best_loss:.4f})")
 
-    # Show examples
-    print("\nExamples:")
-    model.eval()
-    with torch.no_grad():
-        for i in range(3):
-            idx = random.randint(0, len(val_ds) - 1)
-            feat, label = val_ds[idx]
-            feat = feat.unsqueeze(0).to(device)
-            tokens = model(feat, teacher_forcing=False)
-            pred = tokenizer.decode(tokens[0].tolist())
-            truth = tokenizer.decode(label.tolist())
-            print(f"  GT:  {truth}")
-            print(f"  PRED: {pred}")
-            print()
-
-    print(f"Done. Model saved to models/recap_model.pt")
+    print(f"\nDone. Best model at models/recap_model.pt (val_loss={best_loss:.4f})")
 
 
 # ──────────────────────────────────────────────
-# 6. INFERENCE
+# INFERENCE
 # ──────────────────────────────────────────────
-def load_recap_model(path: str = "models/recap_model.pt") -> tuple:
-    """Load trained model + tokenizer."""
-    if not Path(path).exists():
-        raise FileNotFoundError(f"No trained model at {path}. Run train_recap.py first.")
-    checkpoint = torch.load(path, map_location="cpu")
-    tokenizer = checkpoint["tokenizer"]
+def load_recap_model(path: str = "models/recap_model.pt"):
+    ckpt = torch.load(path, map_location="cpu")
+    tokenizer = ckpt["tokenizer"]
     model = RecapTransformer(
-        vocab_size=checkpoint["vocab_size"],
-        feat_dim=checkpoint["feat_dim"],
-        d_model=checkpoint["d_model"],
+        vocab_size=ckpt["vocab_size"],
+        feat_dim=ckpt["feat_dim"],
+        d_model=ckpt["d_model"],
+        nhead=ckpt.get("nhead", 8),
+        nlayers=ckpt.get("nlayers", 4),
     )
-    model.load_state_dict(checkpoint["model_state"])
+    model.load_state_dict(ckpt["model_state"])
     model.eval()
-    return model, tokenizer, checkpoint
+    return model, tokenizer
 
 
-def generate_recap(profile: dict, model: nn.Module, tokenizer: SimpleTokenizer,
-                   device: str = "cpu") -> str:
-    """Generate a recap for a damage profile."""
+def generate(profile: dict, model: nn.Module, tokenizer: SimpleTokenizer,
+             use_beam: bool = True, device: str = "cpu") -> str:
     feat = encode_features(profile).unsqueeze(0).to(device)
     with torch.no_grad():
-        tokens = model(feat, teacher_forcing=False)
+        if use_beam:
+            tokens = model.beam_search(feat, beam_size=3)
+        else:
+            tokens = model(feat, teacher_forcing=False)
     return tokenizer.decode(tokens[0].tolist())
 
 
 if __name__ == "__main__":
-    train()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "generate":
+        # Test mode: generate a random recap
+        p, r = generate_recap()
+        print(f"Profile: {json.dumps(p, indent=2)}")
+        print(f"\nRecap: {r}")
+    else:
+        train()
