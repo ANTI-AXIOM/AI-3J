@@ -126,8 +126,8 @@ def main():
     train_p.add_argument("--lr", type=float, default=0.01)
     train_p.add_argument("--workers", type=int, default=8,
                          help="data loader workers")
-    train_p.add_argument("--device", default="",
-                         help="device: cuda, cuda:0, cpu, or '' for auto-detect")
+    train_p.add_argument("--device", default="0",
+                         help="device: 0, 1, cpu, or '' for auto-detect")
     train_p.set_defaults(func=run_train)
 
     args = parser.parse_args()
