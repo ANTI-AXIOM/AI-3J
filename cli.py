@@ -58,6 +58,7 @@ def run_infer(args):
         tracks_json=str(tracks_json),
         output_json=str(recap_json),
         config_path=args.config_path,
+        llm_model=args.llm_model,
     )
 
     print("\n" + "=" * 60)
@@ -113,6 +114,8 @@ def main():
                          help="YOLO model path or name (default: models/yolo11n.pt)")
     infer_p.add_argument("--keyframes-dir", default="data/keyframes", help="keyframe output dir")
     infer_p.add_argument("--output-dir", default="data/results", help="results output dir")
+    infer_p.add_argument("--llm-model", default="",
+                         help="Ollama model for recap generation (e.g. llama3.2:3b, mistral)")
     infer_p.set_defaults(func=run_infer)
 
     # train subcommand

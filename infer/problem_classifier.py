@@ -1,10 +1,12 @@
 """
 Problem Classifier — damage tracks → insurance problem category + recap
+Uses LLM for natural-language summary (falls back to rule-based).
 """
 
 import json
 import yaml
 from pathlib import Path
+from .recap_llm import LLMRecapGenerator
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -15,14 +17,23 @@ def load_config(config_path: str = "config.yaml") -> dict:
 class ProblemClassifier:
     """Maps detected damage tracks → insurance problem category."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, llm_model: str = ""):
         self.config = config
         self.rules = config["problem_rules"]
         self.severity_rules = config["severity"]
         self.classes = config["classes"]
-        # build name→id lookup from config
         self.car_class_names = {self.classes[i] for i in config["car_classes"]}
         self.house_class_names = {self.classes[i] for i in config["house_classes"]}
+
+        # LLM recap generator (optional)
+        self.llm = None
+        if llm_model:
+            self.llm = LLMRecapGenerator(model=llm_model)
+            if self.llm.available:
+                print(f"  LLM recap enabled (model: {llm_model})")
+            else:
+                print(f"  ! LLM not available at {self.llm.server_url}, using rule-based recap")
+                self.llm = None
 
     def classify(self, tracks: list[dict]) -> tuple[str, str, str]:
         """
@@ -79,46 +90,54 @@ class ProblemClassifier:
                 "severity": t["severity"],
             })
 
-        # Build 2-line English summary
-        if not damage_list:
-            summary = f"Asset identified as {asset}. No damage detected."
-        else:
-            top = sorted(damage_list, key=lambda d: d["confidence"], reverse=True)[:3]
-            items = [f"{d['damage']} on {d['location']} ({d['confidence']:.2f})"
-                     for d in top]
-            parts = []
-            if severity == "high":
-                parts.append("Significant damage detected")
-            elif severity == "medium":
-                parts.append("Moderate damage detected")
-            else:
-                parts.append("Minor damage detected")
-
-            repair_notes = {
-                "collision": "Likely needs bodywork + paint.",
-                "water_damage": "Requires drying, mold remediation, and structural check.",
-                "fire_damage": "Specialized assessment needed. Possible total loss.",
-                "storm_impact": "Structural inspection recommended.",
-                "wear_tear": "Cosmetic only — not covered.",
-            }
-            repair = repair_notes.get(problem, "Assessment needed.")
-            summary = f"{asset.capitalize()} — {problem} damage. {'; '.join(items)}. {repair}"
-
-        return {
+        recap = {
             "asset": asset,
             "problem": problem,
             "severity": severity,
             "damage_count": len(tracks),
             "tracks": damage_list,
-            "summary": summary,
         }
 
+        # Generate summary: LLM if available, else rule-based
+        if self.llm and self.llm.available:
+            recap["summary"] = self.llm.generate(recap)
+        else:
+            recap["summary"] = self._rule_summary(recap)
 
-def run_classifier(tracks_json: str, output_json: str, config_path: str = "config.yaml"):
+        return recap
+
+    def _rule_summary(self, recap_data: dict) -> str:
+        """Fallback rule-based summary."""
+        asset = recap_data["asset"]
+        problem = recap_data["problem"]
+        severity = recap_data["severity"]
+        tracks = recap_data["tracks"]
+
+        if not tracks:
+            return f"Asset identified as {asset}. No damage detected."
+
+        top = sorted(tracks, key=lambda d: d["confidence"], reverse=True)[:3]
+        items = [f"{d['damage']} on {d['location']} ({d['confidence']:.2f})"
+                 for d in top]
+
+        severity_label = {"high": "Significant", "medium": "Moderate", "low": "Minor"}
+        repair_notes = {
+            "collision": "Likely needs bodywork + paint.",
+            "water_damage": "Requires drying, mold remediation, and structural check.",
+            "fire_damage": "Specialized assessment needed. Possible total loss.",
+            "storm_impact": "Structural inspection recommended.",
+            "wear_tear": "Cosmetic only — not covered.",
+        }
+        repair = repair_notes.get(problem, "Assessment needed.")
+        return f"{severity_label.get(severity, 'Unknown')} {problem} damage on {asset}. {'; '.join(items)}. {repair}"
+
+
+def run_classifier(tracks_json: str, output_json: str, config_path: str = "config.yaml",
+                   llm_model: str = ""):
     with open(tracks_json) as f:
         tracks = json.load(f)
     config = load_config(config_path)
-    classifier = ProblemClassifier(config)
+    classifier = ProblemClassifier(config, llm_model=llm_model)
     recap = classifier.generate_recap(tracks)
     with open(output_json, "w") as f:
         json.dump(recap, f, indent=2)
