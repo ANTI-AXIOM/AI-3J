@@ -1,0 +1,33 @@
+[4/4] Classifying problem + generating recap...
+  Recap model enabled (models/recap_model.pt)
+Traceback (most recent call last):
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/cli.py", line 159, in <module>
+    main()
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/cli.py", line 155, in main
+    args.func(args)
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/cli.py", line 57, in run_infer
+    recap = run_classifier(
+            ^^^^^^^^^^^^^^^
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/infer/problem_classifier.py", line 141, in run_classifier
+    recap = classifier.generate_recap(tracks)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/infer/problem_classifier.py", line 103, in generate_recap
+    recap["summary"] = self.recap_gen.generate(recap)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/infer/recap_model_gen.py", line 35, in generate
+    self.load()
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/infer/recap_model_gen.py", line 30, in load
+    self.model, self.tokenizer = load_recap_model(str(self.model_path))
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/recap_model.py", line 487, in load_recap_model
+    ckpt = torch.load(path, map_location="cpu")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/venv/lib/python3.12/site-packages/torch/serialization.py", line 1578, in load
+    raise pickle.UnpicklingError(_get_wo_message(str(e))) from None
+_pickle.UnpicklingError: Weights only load failed. This file can still be loaded, to do so you have two options, do those steps only if you trust the source of the checkpoint. 
+        (1) In PyTorch 2.6, we changed the default value of the `weights_only` argument in `torch.load` from `False` to `True`. Re-running `torch.load` with `weights_only` set to `False` will likely succeed, but it can result in arbitrary code execution. Do it only if you got the file from a trusted source.
+        (2) Alternatively, to load with `weights_only=True` please check the recommended steps in the following error message.
+        WeightsUnpickler error: Unsupported global: GLOBAL __main__.SimpleTokenizer was not an allowed global by default. Please use `torch.serialization.add_safe_globals([__main__.SimpleTokenizer])` or the `torch.serialization.safe_globals([__main__.SimpleTokenizer])` context manager to allowlist this global if you trust this class/function.
+
+Check the documentation of torch.load to learn more about types accepted by default with weights_only https://pytorch.org/docs/stable/generated/torch.load.html.
+

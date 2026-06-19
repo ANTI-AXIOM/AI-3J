@@ -484,7 +484,7 @@ def train(epochs: int = 10):
 # INFERENCE
 # ──────────────────────────────────────────────
 def load_recap_model(path: str = "models/recap_model.pt"):
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
     tokenizer = ckpt["tokenizer"]
     model_type = ckpt.get("model_type", "")
 
