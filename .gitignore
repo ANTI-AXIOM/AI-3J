@@ -13,7 +13,6 @@ property_damage/
 raw_dataset/
 raw_keyframes/
 data/
-models/
 
 # Model files
 *.pt
