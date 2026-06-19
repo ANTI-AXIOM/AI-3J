@@ -461,7 +461,8 @@ def train(epochs: int = 10):
             best_loss = avg_val
             torch.save({
                 "model_state": model.state_dict(),
-                "tokenizer": tokenizer,
+                "tokenizer_vocab": tokenizer.word2idx,
+                "tokenizer_reverse": {int(k): v for k, v in tokenizer.idx2word.items()},
                 "vocab_size": tokenizer.vocab_size,
                 "feat_dim": feat_dim,
                 "d_model": 192,
@@ -485,7 +486,18 @@ def train(epochs: int = 10):
 # ──────────────────────────────────────────────
 def load_recap_model(path: str = "models/recap_model.pt"):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    tokenizer = ckpt["tokenizer"]
+    # Reconstruct tokenizer from saved dict (avoids pickle path issues)
+    tokenizer = SimpleTokenizer()
+    if "tokenizer_vocab" in ckpt:
+        tokenizer.word2idx = ckpt["tokenizer_vocab"]
+        tokenizer.idx2word = {int(k): v for k, v in ckpt["tokenizer_reverse"].items()}
+        tokenizer.vocab_size = ckpt["vocab_size"]
+    else:
+        # Old checkpoint fallback — tokenizer was saved as object
+        old_tok = ckpt["tokenizer"]
+        tokenizer.word2idx = old_tok.word2idx
+        tokenizer.idx2word = {int(k): v for k, v in old_tok.idx2word.items()}
+        tokenizer.vocab_size = old_tok.vocab_size
     model_type = ckpt.get("model_type", "")
 
     if model_type == "CausalTransformer":
