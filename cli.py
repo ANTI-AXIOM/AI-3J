@@ -14,6 +14,91 @@ from infer.problem_classifier import run_classifier, load_config
 
 
 def run_infer(args):
+    if args.annotate:
+        # Full-video mode: process every frame, save annotated video
+        import cv2
+        from ultralytics import YOLO
+
+        model = YOLO(args.model)
+        cap = cv2.VideoCapture(args.video)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out_path = args.output_video or str(Path(args.video).with_suffix("")) + "_annotated.mp4"
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = model(frame, conf=args.config.get("model", {}).get("conf_threshold", 0.25),
+                            iou=args.config.get("model", {}).get("iou_threshold", 0.45),
+                            device=args.config.get("model", {}).get("device", "cpu"))
+            annotated = results[0].plot()
+            writer.write(annotated)
+            frame_idx += 1
+
+        cap.release()
+        writer.release()
+        print(f"Annotated video saved to {out_path} ({frame_idx} frames)")
+
+        # Still run the recap on all detections
+        from infer.temporal_agg import run_aggregation
+        from infer.problem_classifier import run_classifier
+        detections = []
+        cap = cv2.VideoCapture(args.video)
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = model(frame, conf=args.config.get("model", {}).get("conf_threshold", 0.25),
+                            iou=args.config.get("model", {}).get("iou_threshold", 0.45),
+                            device=args.config.get("model", {}).get("device", "cpu"))
+            dets = []
+            for box in results[0].boxes:
+                xyxy = box.xyxy[0].tolist()
+                dets.append({
+                    "bbox": [round(x, 1) for x in xyxy],
+                    "class_id": int(box.cls[0]),
+                    "confidence": round(float(box.conf[0]), 3),
+                })
+            if dets:
+                detections.append({"frame_idx": frame_idx, "detections": dets})
+            frame_idx += 1
+        cap.release()
+
+        detections_json = Path(args.output_dir) / "01_detections.json"
+        (Path(args.output_dir)).mkdir(parents=True, exist_ok=True)
+        with open(detections_json, "w") as f:
+            json.dump(detections, f, indent=2)
+        print(f"  → {sum(len(f['detections']) for f in detections)} detections across {len(detections)} frames")
+
+        tracks_json = Path(args.output_dir) / "02_tracks.json"
+        tracks = run_aggregation(
+            detections_json=str(detections_json),
+            output_json=str(tracks_json),
+            iou_threshold=args.config.get("temporal_agg", {}).get("iou_threshold", 0.3),
+            min_track_frames=args.config.get("temporal_agg", {}).get("min_track_frames", 2),
+        )
+        print(f"  → {len(tracks)} damage tracks")
+
+        recap_json = Path(args.output_dir) / "03_recap.json"
+        recap = run_classifier(
+            tracks_json=str(tracks_json),
+            output_json=str(recap_json),
+            config_path=args.config_path,
+            recap_model_path=args.recap_model,
+        )
+        print("\n" + "=" * 60)
+        print("RECAP:")
+        print(recap["summary"])
+        print("=" * 60)
+        return
+
+    # Original keyframe-based pipeline
     print(f"[1/4] Extracting keyframes from {args.video}...")
     frames = extract_keyframes(
         video_path=args.video,
@@ -116,6 +201,10 @@ def main():
     infer_p.add_argument("--output-dir", default="data/results", help="results output dir")
     infer_p.add_argument("--recap-model", default="",
                          help="path to trained recap model (models/recap_model.pt)")
+    infer_p.add_argument("--annotate", action="store_true",
+                         help="save annotated video (full frame-by-frame processing)")
+    infer_p.add_argument("--output-video", default="",
+                         help="path for annotated video output (default: input_annotated.mp4)")
     infer_p.set_defaults(func=run_infer)
 
     # train subcommand
