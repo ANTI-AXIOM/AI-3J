@@ -500,10 +500,19 @@ def load_recap_model(path: str = "models/recap_model.pt"):
 
 def generate(profile: dict, model: nn.Module, tokenizer: SimpleTokenizer,
              device: str = "cpu") -> str:
+    """Generate recap. Falls back to rule-based summary if generation is empty or garbled."""
     feat = encode_features(profile).unsqueeze(0).to(device)
     with torch.no_grad():
         tokens = model(feat, teacher_forcing=False)
-    return tokenizer.decode(tokens[0].tolist())
+
+    text = tokenizer.decode(tokens[0].tolist()).strip()
+    if len(text) < 10 or "unk" in text.lower():
+        from infer.problem_classifier import ProblemClassifier
+        import yaml
+        config = yaml.safe_load(open("config.yaml"))
+        fallback = ProblemClassifier(config)
+        return fallback._rule_summary(profile)
+    return text
 
 
 if __name__ == "__main__":
