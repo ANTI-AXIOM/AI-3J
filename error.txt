@@ -19,18 +19,17 @@ Traceback (most recent call last):
   File "/mnt/netta/users/sdenojean/Documents/IA_fin/infer/recap_model_gen.py", line 30, in load
     self.model, self.tokenizer = load_recap_model(str(self.model_path))
                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/mnt/netta/users/sdenojean/Documents/IA_fin/recap_model.py", line 487, in load_recap_model
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/recap_model.py", line 488, in load_recap_model
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/mnt/netta/users/sdenojean/Documents/IA_fin/venv/lib/python3.12/site-packages/torch/serialization.py", line 1579, in load
     return _load(
            ^^^^^^
-  File "/mnt/netta/users/sdenojean/Documents/IA_fin/venv/lib/python3.12/site-packages/torch/serialization.py", line 2190, in _loadx
+  File "/mnt/netta/users/sdenojean/Documents/IA_fin/venv/lib/python3.12/site-packages/torch/serialization.py", line 2190, in _load
     result = unpickler.load()
              ^^^^^^^^^^^^^^^^
   File "/mnt/netta/users/sdenojean/Documents/IA_fin/venv/lib/python3.12/site-packages/torch/serialization.py", line 2179, in find_class
     return super().find_class(mod_name, name)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AttributeError: Can't get attribute 'SimpleTokenizer' on <module '__main__' from '/mnt/netta/users/sdenojean/Documents/IA_fin/cli.py'>
-
 

@@ -8,9 +8,9 @@ paths:
   export_dir: "export"
 
 extraction:
-  scene_threshold: 30.0          # scenedetect content-aware threshold
-  blur_variance_min: 100         # Laplacian variance; below = blurry, discard
-  dedup_corr_threshold: 0.95     # histogram correlation; above = duplicate
+  scene_threshold: 30.0
+  blur_variance_min: 100
+  dedup_corr_threshold: 0.95
   max_keyframes_per_video: 50
 
 model:
@@ -18,7 +18,7 @@ model:
   imgsz: 640
   conf_threshold: 0.25
   iou_threshold: 0.45
-  device: "0"                    # "0" for first GPU, "cpu" for CPU
+  device: "0"
 
 training:
   epochs: 100
@@ -36,52 +36,232 @@ training:
 temporal_agg:
   iou_threshold: 0.3
   min_track_frames: 2
-  location_map:
-    "dent": ["hood", "door", "fender", "roof"]
-    "crack": ["bumper", "windshield", "wall", "window"]
-    "scratch": ["door", "bumper", "fender", "wall"]
-    "broken_glass": ["windshield", "window", "headlight"]
-    "water_damage": ["ceiling", "wall", "floor"]
-    "structural_crack": ["wall", "foundation", "ceiling"]
 
 recap:
   max_output_keyframes: 5
 
+# ── 100 unified classes (IDs 0-99) ──────────────────────────────────
+#   0-68: car damage   69-96: property damage   97-99: orphaned
 classes:
-  0: "broken_glass"
-  1: "broken_window"
-  2: "collision_damage"
-  3: "crack"
-  4: "dent"
-  5: "fire_damage"
-  6: "mold"
-  7: "paint_peel"
-  8: "roof_damage"
-  9: "scratch"
-  10: "storm_debris"
-  11: "structural_crack"
-  12: "water_damage"
-  13: "wheel_damage"
+  0: dent_rear_right_wing
+  1: dent_rear_left_wing
+  2: dent_front_right_wing
+  3: dent_front_left_wing
+  4: dent_hood
+  5: dent_trunk
+  6: dent_rear_bumper
+  7: dent_front_bumper
+  8: dent_rear_right_door
+  9: dent_rear_left_door
+  10: dent_front_right_door
+  11: dent_front_left_door
+  12: broken_rear_light
+  13: broken_windshield
+  14: broken_headlight
+  15: broken_window
+  16: cracked_hood
+  17: cracked_rear_bumper
+  18: cracked_front_bumper
+  19: broken_mirror
+  20: crushed_rear_right_wing
+  21: crushed_rear_left_wing
+  22: crushed_front_right_wing
+  23: crushed_front_left_wing
+  24: crushed_hood
+  25: crushed_trunk
+  26: crushed_rear_bumper
+  27: crushed_front_bumper
+  28: crushed_rear_right_door
+  29: crushed_rear_left_door
+  30: crushed_front_door
+  31: crushed_front_right_door
+  32: crushed_front_left_door
+  33: crushed_roof
+  34: crack_rear_right_wing
+  35: crack_rear_left_wing
+  36: crack_front_right_wing
+  37: crack_front_left_wing
+  38: crack_hood
+  39: crack_rear_bumper
+  40: crack_front_bumper
+  41: crack_rear_right_door
+  42: crack_rear_left_door
+  43: crack_front_right_door
+  44: crack_front_left_door
+  45: impact_windshield
+  46: impact_window
+  47: chipped_paint_rear_right_wing
+  48: chipped_paint_rear_left_wing
+  49: chipped_paint_front_right_wing
+  50: chipped_paint_front_left_wing
+  51: chipped_paint_hood
+  52: chipped_paint_trunk
+  53: chipped_paint_rear_bumper
+  54: chipped_paint_front_bumper
+  55: chipped_paint_rear_right_door
+  56: chipped_paint_rear_left_door
+  57: chipped_paint_front_right_door
+  58: chipped_paint_front_left_door
+  59: scratch_rear_right_wing
+  60: scratch_rear_left_wing
+  61: scratch_front_right_wing
+  62: scratch_front_left_wing
+  63: scratch_rear_bumper
+  64: scratch_front_bumper
+  65: scratch_rear_right_door
+  66: scratch_rear_left_door
+  67: scratch_front_right_door
+  68: scratch_front_left_door
+  69: blown_render_trapped_moisture
+  70: brick_algae
+  71: brick_efflorescence
+  72: broken_or_loose_roof_tile
+  73: condensation
+  74: damaged_render
+  75: flaking_paint_trapped_moisture
+  76: lichen_growth
+  77: rising_damp
+  78: spalled_brickwork
+  79: blocked_air_vent
+  80: breached_dpc
+  81: distortion_to_chimney
+  82: drying_out_shrinkage_plaster_interior
+  83: drying_out_shrinkage_plaster
+  84: internal_cracking
+  85: mould_growth
+  86: penetrating_or_rising_damp
+  87: potential_leak_water_ingress
+  88: sill_to_header_cracking_structural
+  89: stepped_cracking_structural
+  90: structural_cracking
+  91: structural_cracking_trapped_moisture
+  92: structural_defect_trapped_water
+  93: structural_defect_chimney_breast
+  94: trapped_moisture
+  95: trapped_moisture_chimney_shoulder
+  96: trapped_moisture_chimney_stack
+  97: wheel_damage
+  98: fire_damage
+  99: storm_debris
 
-# which classes are car vs house damage
-car_classes: [0, 2, 3, 4, 7, 9, 13]
-house_classes: [1, 5, 6, 8, 10, 11, 12]
+# Car = IDs 0-68 (dent, broken, cracked, crushed, crack, impact, chipped_paint, scratch)
+# House = IDs 69-96 (blown_render, brick_*, roof_tile, damp, mould, cracking, etc.)
+# Orphaned = 97-99 (wheel_damage, fire_damage, storm_debris — no samples)
+car_classes: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68]
+house_classes: [69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96]
 
 problem_rules:
   collision:
-    requires: ["dent", "scratch", "collision_damage", "broken_glass", "wheel_damage"]
+    requires:
+      - dent_rear_right_wing
+      - dent_rear_left_wing
+      - dent_front_right_wing
+      - dent_front_left_wing
+      - dent_hood
+      - dent_trunk
+      - dent_rear_bumper
+      - dent_front_bumper
+      - dent_rear_right_door
+      - dent_rear_left_door
+      - dent_front_right_door
+      - dent_front_left_door
+      - cracked_hood
+      - cracked_rear_bumper
+      - cracked_front_bumper
+      - crushed_rear_right_wing
+      - crushed_rear_left_wing
+      - crushed_front_right_wing
+      - crushed_front_left_wing
+      - crushed_hood
+      - crushed_trunk
+      - crushed_rear_bumper
+      - crushed_front_bumper
+      - crushed_rear_right_door
+      - crushed_rear_left_door
+      - crushed_front_door
+      - crushed_front_right_door
+      - crushed_front_left_door
+      - crushed_roof
+      - crack_rear_right_wing
+      - crack_rear_left_wing
+      - crack_front_right_wing
+      - crack_front_left_wing
+      - crack_hood
+      - crack_rear_bumper
+      - crack_front_bumper
+      - crack_rear_right_door
+      - crack_rear_left_door
+      - crack_front_right_door
+      - crack_front_left_door
+      - impact_windshield
+      - impact_window
+      - scratch_rear_right_wing
+      - scratch_rear_left_wing
+      - scratch_front_right_wing
+      - scratch_front_left_wing
+      - scratch_rear_bumper
+      - scratch_front_bumper
+      - scratch_rear_right_door
+      - scratch_rear_left_door
+      - scratch_front_right_door
+      - scratch_front_left_door
+      - broken_rear_light
+      - broken_windshield
+      - broken_headlight
+      - broken_window
+      - broken_mirror
+      - wheel_damage
     min_classes: 1
   water_damage:
-    requires: ["water_damage", "mold"]
+    requires:
+      - blown_render_trapped_moisture
+      - condensation
+      - flaking_paint_trapped_moisture
+      - rising_damp
+      - penetrating_or_rising_damp
+      - potential_leak_water_ingress
+      - trapped_moisture
+      - trapped_moisture_chimney_shoulder
+      - trapped_moisture_chimney_stack
+      - mould_growth
+      - breached_dpc
+      - damaged_render
     min_classes: 1
   fire_damage:
-    requires: ["fire_damage"]
+    requires:
+      - fire_damage
     min_classes: 1
   storm_impact:
-    requires: ["structural_crack", "roof_damage", "broken_window", "storm_debris"]
+    requires:
+      - broken_or_loose_roof_tile
+      - structural_cracking
+      - structural_cracking_trapped_moisture
+      - structural_defect_trapped_water
+      - structural_defect_chimney_breast
+      - internal_cracking
+      - sill_to_header_cracking_structural
+      - stepped_cracking_structural
+      - distortion_to_chimney
+      - storm_debris
     min_classes: 1
   wear_tear:
-    requires: ["paint_peel"]
+    requires:
+      - chipped_paint_rear_right_wing
+      - chipped_paint_rear_left_wing
+      - chipped_paint_front_right_wing
+      - chipped_paint_front_left_wing
+      - chipped_paint_hood
+      - chipped_paint_trunk
+      - chipped_paint_rear_bumper
+      - chipped_paint_front_bumper
+      - chipped_paint_rear_right_door
+      - chipped_paint_rear_left_door
+      - chipped_paint_front_right_door
+      - chipped_paint_front_left_door
+      - spalled_brickwork
+      - brick_efflorescence
+      - brick_algae
+      - lichen_growth
     min_classes: 1
 
 severity:
