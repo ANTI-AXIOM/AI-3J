@@ -1,0 +1,82 @@
+[
+  {
+    "epoch": 1,
+    "epoch_time_s": 29.73,
+    "avg_batch_time_ms": 781.42,
+    "it_per_sec": 1.28,
+    "gpu_util_pct": 1,
+    "gpu_mem_gb": 0.53,
+    "loss": {
+      "total_loss": 89.5502
+    },
+    "metrics/precision(B)": 0.0,
+    "metrics/recall(B)": 0.0,
+    "metrics/mAP50(B)": 0.0,
+    "metrics/mAP50-95(B)": 0.0,
+    "val/box_loss": 0.0,
+    "val/cls_loss": 0.0,
+    "val/dfl_loss": 0.0,
+    "batch_time_samples": [
+      6280.4,
+      1369.2,
+      905.5,
+      601.6,
+      533.6,
+      535.5,
+      532.9,
+      708.7,
+      552.7,
+      542.7,
+      538.7,
+      536.6,
+      540.7,
+      542.8,
+      546.8,
+      540.4,
+      539.2,
+      536.4,
+      538.7,
+      537.6
+    ]
+  },
+  {
+    "epoch": 2,
+    "epoch_time_s": 177.49,
+    "avg_batch_time_ms": 4668.57,
+    "it_per_sec": 0.21,
+    "gpu_util_pct": 29,
+    "gpu_mem_gb": 0.52,
+    "loss": {
+      "total_loss": 98.4871
+    },
+    "metrics/precision(B)": 0.0,
+    "metrics/recall(B)": 0.0,
+    "metrics/mAP50(B)": 0.0,
+    "metrics/mAP50-95(B)": 0.0,
+    "val/box_loss": 1.7117,
+    "val/cls_loss": 6.3738,
+    "val/dfl_loss": 2.263,
+    "batch_time_samples": [
+      998.7,
+      633.1,
+      559.7,
+      875.7,
+      726.1,
+      698.1,
+      540.3,
+      546.3,
+      537.1,
+      581.2,
+      573.1,
+      590.9,
+      592.0,
+      1190.9,
+      2373.9,
+      671.0,
+      26311.9,
+      569.1,
+      1934.7,
+      1141.1
+    ]
+  }
+]
