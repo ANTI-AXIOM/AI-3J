@@ -486,13 +486,24 @@ def train(epochs: int = 10):
 def load_recap_model(path: str = "models/recap_model.pt"):
     ckpt = torch.load(path, map_location="cpu")
     tokenizer = ckpt["tokenizer"]
-    model = CausalTransformer(
-        vocab_size=ckpt["vocab_size"],
-        feat_dim=ckpt["feat_dim"],
-        d_model=ckpt["d_model"],
-        nhead=ckpt.get("nhead", 6),
-        nlayers=ckpt.get("nlayers", 4),
-    )
+    model_type = ckpt.get("model_type", "")
+
+    if model_type == "CausalTransformer":
+        model = CausalTransformer(
+            vocab_size=ckpt["vocab_size"],
+            feat_dim=ckpt["feat_dim"],
+            d_model=ckpt["d_model"],
+            nhead=ckpt.get("nhead", 6),
+            nlayers=ckpt.get("nlayers", 4),
+        )
+    else:
+        # Old checkpoint — retrain advice
+        raise RuntimeError(
+            f"Checkpoint uses '{model_type or 'unknown'}' architecture. "
+            f"Current code uses CausalTransformer. "
+            f"Run: python recap_model.py"
+        )
+
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     return model, tokenizer
