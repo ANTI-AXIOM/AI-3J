@@ -132,11 +132,10 @@ data/results/
 
 | Source | Count | Format |
 |--------|-------|--------|
-| Car damage (French → English remapped) | 1235 images | YOLO `.txt`, 69 original classes mapped to location-specific English names |
-| Property damage | 1652 images | YOLO `.txt`, 28 English classes |
-| Original dataset_frames | 84 images | YOLO `.txt`, 14 generic classes |
+| Car damage (French → English remapped) | 1 235 images | YOLO `.txt`, 69 original classes mapped to location-specific English names |
+| Property damage | 1 652 images | YOLO `.txt`, 28 English classes |
 
-**Merged**: 2971 total (2791 labeled), 100 unified classes.
+**Merged**: 2 887 total (2 732 labeled), 100 class IDs (97 active, 3 orphaned from removed original dataset).
 **Merge tool**: `merge_datasets.py` handles cross-dataset class ID mapping.
 
 ## 5. Stack

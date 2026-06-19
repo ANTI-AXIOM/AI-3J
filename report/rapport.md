@@ -71,7 +71,7 @@ Le jeu de données final est le résultat de la fusion de trois sources distinct
 | Property damage | 1 652 | 28 classes en anglais | Dommages immobiliers (moisissure, fissure structurelle, etc.) |
 | Dataset original | 84 | 14 classes génériques | Annotations initiales du projet |
 
-**Total : 2 971 images, dont 2 791 avec annotations (180 images sans défaut).**
+**Total : 2 887 images, dont 2 732 avec annotations (59 images sans défaut de la source originale retirée).**
 
 ### 3.2 Unification
 

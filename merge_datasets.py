@@ -219,17 +219,7 @@ for split in ["train", "valid", "test"]:
     if imgs:
         print(f"  property_damage/{split}: {imgs} images, {lbls} boxes")
 
-# 3. dataset_frames_old (original)
-old_img_dir = Path("dataset_frames_old") / "images"
-old_lbl_dir = Path("dataset_frames_old") / "labels"
-if old_img_dir.exists():
-    imgs, lbls = copy_and_remap(old_img_dir, old_lbl_dir, "orig", ORIG_TO_UNIFIED)
-    print(f"  dataset_frames_old: {imgs} images, {lbls} boxes")
-elif Path("dataset_frames").exists() and not (IMGDIR / "orig_").exists():
-    # Check if old was already merged (look for orig_ prefixed files)
-    existing = list(IMGDIR.glob("orig_*"))
-    if not existing:
-        print("  ! dataset_frames_old not found — original frames may be missing")
+# 3. dataset_frames_old (original) — skipped: polluted class space, removed from repo
 
 # Write dataset.yaml
 yaml_content = f"""# Unified dataset — car damage + property damage
